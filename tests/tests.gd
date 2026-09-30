@@ -1,5 +1,5 @@
 extends Node
-## Автотесты стратегии: приказы, способности, необратимые потери, цикл поражений.
+## Автотесты стратегии: приказы, способности, потери героев, дни и переигровка ночей.
 ## Запуск: godot --headless res://tests/tests.tscn  (код выхода 0 — всё зелёное)
 
 const DT := 1.0 / 60.0
@@ -25,11 +25,10 @@ func _ready() -> void:
 	test_attacks_cannot_be_dodged()
 	test_knight_taunt()
 	test_firerain_friendly_fire()
-	test_hero_death_is_permanent()
-	test_defeat_drops_ash_and_win_reclaims()
-	test_second_defeat_loses_ash()
+	test_hero_death_after_won_night()
+	test_retry_restores_night()
 	test_night_progression()
-	test_beacon_shop()
+	test_day_shop()
 	balance_runs()
 
 	print("")
@@ -47,8 +46,9 @@ func check(cond: bool, name: String) -> void:
 
 ## Ночь без спавна (далёкий враг держит её открытой).
 func fresh_night(n: int = 1) -> void:
-	game.go_beacon()
-	game.start_night(n, true)
+	Save.data.night = n
+	game.go_day()
+	game.start_night(n)
 	game.schedule = [[9999.0, "husk"]]
 
 
@@ -73,7 +73,7 @@ func test_arc() -> void:
 
 func test_new_game_roster() -> void:
 	game.new_game()
-	check(game.screen == "beacon", "новая игра начинается у маяка")
+	check(game.screen == "day", "новая игра начинается с дня")
 	check(Save.data.roster.size() == 3, "стартовый гарнизон — 3 героя")
 	fresh_night()
 	check(game.heroes.size() == 3, "герои вышли на поле")
@@ -110,13 +110,13 @@ func test_moving_hero_does_not_attack() -> void:
 func test_archer_kills_and_gains_xp() -> void:
 	game.new_game()
 	fresh_night()
-	Save.data.ash = 0
+	Save.data.gold = 0
 	var a := hero_of("archer")
 	var e: Enemy = game.spawn("husk", a.position + Vector2(0, -60))
-	var gain := e.ash
+	var gain := e.gold
 	run(15.0)
 	check(e.state == "dead", "утопленник убит")
-	check(int(Save.data.ash) >= gain, "за убийство начислен пепел")
+	check(int(Save.data.gold) >= gain, "за убийство начислено золото")
 
 
 func test_enemy_targets_field_hero_not_wall() -> void:
@@ -192,42 +192,37 @@ func test_firerain_friendly_fire() -> void:
 	check(k.hp < hp0, "огонь задел своего")
 
 
-func test_hero_death_is_permanent() -> void:
+func test_hero_death_after_won_night() -> void:
 	game.new_game()
 	fresh_night()
 	var p := hero_of("priest")
 	var name: String = p.data.name
 	p.take_damage(9999.0, game)
 	check(game.heroes.size() == 2, "павший исчез с поля")
-	check(Save.data.roster.size() == 2, "павший удалён из сохранения")
 	check(Save.data.fallen.size() == 1 and Save.data.fallen[0].name == name, "павший записан в память")
+	game.schedule.clear()
+	game.step(DT)
+	check(game.screen == "day", "ночь выиграна → день")
 	Save.load_game()
-	check(Save.data.roster.size() == 2, "после перезагрузки его не вернуть")
+	check(Save.data.roster.size() == 2, "после победы гибель сохранена")
 
 
-func test_defeat_drops_ash_and_win_reclaims() -> void:
+func test_retry_restores_night() -> void:
 	game.new_game()
-	fresh_night()
-	Save.data.ash = 50
+	Save.data.gold = 40
+	game.go_day()
+	game.start_night(1)
+	game.schedule = [[9999.0, "husk"]]
+	var p := hero_of("priest")
+	p.take_damage(9999.0, game)
+	Save.data.gold = 999
 	game.gate_hp = 0.0
 	run(2.0)
 	check(game.screen == "dead", "ворота пали → поражение")
-	check(int(Save.data.dropped_ash) == 50 and int(Save.data.ash) == 0, "пепел остался у ворот")
-	game.go_beacon()
-	game.start_night(1, true)
-	game.schedule.clear()
-	game.step(DT)
-	check(int(Save.data.ash) == 50 and int(Save.data.dropped_ash) == 0, "победа вернула пепел")
-
-
-func test_second_defeat_loses_ash() -> void:
-	game.new_game()
-	Save.data.dropped_ash = 77
-	fresh_night()
-	game.gate_hp = 0.0
-	run(2.0)
-	check(int(Save.data.dropped_ash) == 0, "второе поражение развеяло пепел")
-	check(game.fall_note.contains("77"), "игрок узнал о потере")
+	game.retry_night()
+	check(game.screen == "night" and game.night == 1, "ночь начата заново")
+	check(game.heroes.size() == 3 and Save.data.roster.size() == 3, "переигровка вернула павшего")
+	check(int(Save.data.gold) == 40, "золото вернулось к утру")
 
 
 func test_night_progression() -> void:
@@ -235,30 +230,31 @@ func test_night_progression() -> void:
 	fresh_night(1)
 	game.schedule.clear()
 	game.step(DT)
-	check(game.screen == "dawn" and game.night == 2, "ночь 1 → рассвет, ночь 2")
-	game.start_night(3, false)
+	check(game.screen == "day" and game.night == 2, "ночь 1 → день перед ночью 2")
+	check(int(Save.data.night) == 2, "прогресс сохранён")
+	fresh_night(6)
 	game.schedule.clear()
 	game.step(DT)
-	check(game.screen == "beacon" and int(Save.data.beacon_night) == 4, "ночь 4 — новый маяк")
+	check(game.screen == "victory", "после 6-й ночи — победа")
 
 
-func test_beacon_shop() -> void:
+func test_day_shop() -> void:
 	game.new_game()
-	Save.data.ash = 5000
-	check(game.beacon_buy("recruit"), "призыв героя")
+	Save.data.gold = 5000
+	check(game.day_buy("recruit"), "найм героя")
 	check(Save.data.roster.size() == 4, "в гарнизоне 4 героя")
 	var r: Dictionary = Save.data.roster[0]
-	check(game.beacon_buy("train:%d" % int(r.id)) and int(r.lvl) == 2, "тренировка повышает уровень")
+	check(game.day_buy("train:%d" % int(r.id)) and int(r.lvl) == 2, "тренировка повышает уровень")
 	Save.data.towers = 2
-	check(not game.beacon_buy("tower"), "больше двух лучников на башнях нельзя")
+	check(not game.day_buy("tower"), "больше двух лучников на башнях нельзя")
 	for i in 5:
-		game.beacon_buy("recruit")
+		game.day_buy("recruit")
 	check(Save.data.roster.size() == game.MAX_HEROES, "не больше %d героев" % game.MAX_HEROES)
-	Save.data.ash = 0
-	check(not game.beacon_buy("gate"), "без пепла ничего не купить")
+	Save.data.gold = 0
+	check(not game.day_buy("gate"), "без золота ничего не купить")
 	Save.data.roster.clear()
-	game.go_beacon()
-	check(Save.data.roster.size() == 2, "без героев к маяку приходят добровольцы")
+	game.go_day()
+	check(Save.data.roster.size() == 2, "без героев приходят добровольцы")
 
 
 # ------------------------------------------------------------------ баланс
@@ -287,37 +283,35 @@ func _no_friends_near(p: Vector2, r: float) -> bool:
 	return true
 
 
-## Проходит кампанию ботом и печатает, где он спотыкается. Проверяет только отсутствие падений.
+## Проходит кампанию ботом (с переигровками) и печатает результат. Проверяет только отсутствие падений.
 func balance_runs() -> void:
 	var results: Array = []
 	for run_i in 3:
 		game.new_game()
+		var retries := 0
 		var guard := 0
-		while guard < 400000 and int(Save.data.defeats) < 8:
+		while guard < 400000 and retries < 8:
 			guard += 1
 			if game.screen == "victory":
 				break
 			match game.screen:
-				"beacon":
+				"day":
 					var bought := true
 					while bought:
-						bought = game.beacon_buy("recruit") or game.beacon_buy("tower") or game.beacon_buy("gate")
+						bought = game.day_buy("recruit") or game.day_buy("tower") or game.day_buy("gate")
 						if not bought:
 							for r in Save.data.roster:
-								if game.beacon_buy("train:%d" % int(r.id)):
+								if game.day_buy("train:%d" % int(r.id)):
 									bought = true
 									break
-					if Save.data.roster.is_empty():
-						break
-					game.start_night(game.night, true)
-				"dawn":
-					game.start_night(game.night, false)
+					game.start_night(game.night)
 				"dead":
-					game.go_beacon()
+					retries += 1
+					game.retry_night()
 				"night":
 					bot_step()
 					game.step(DT)
-		results.append("ночь %d, поражений %d, павших %d, живых %d — %s" % [game.night, int(Save.data.defeats),
+		results.append("ночь %d, переигровок %d, павших %d, живых %d — %s" % [game.night, retries,
 			Save.data.fallen.size(), Save.data.roster.size(), "ПОБЕДА" if game.screen == "victory" else "не прошёл"])
 	for r in results:
 		print("        бот: ", r)

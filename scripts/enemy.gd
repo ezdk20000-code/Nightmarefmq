@@ -8,35 +8,35 @@ const GLINT_TIME := 0.15
 static var DEFS := {
 	"husk": {
 		"name": "Утопленник", "sprite": "husk", "hp": 60.0, "speed": 26.0, "poise": 30.0,
-		"aggro": 70.0, "stop": 14.0, "radius": 5.0, "ash": 5,
+		"aggro": 70.0, "stop": 14.0, "radius": 5.0, "gold": 3,
 		"attacks": [
 			{"type": "arc", "range": 18.0, "reach": 22.0, "arc": 70.0, "windup": 0.7, "active": 0.12, "recover": 0.8, "dmg": 22.0},
 		],
 	},
 	"hound": {
 		"name": "Гончая", "sprite": "hound", "hp": 35.0, "speed": 58.0, "poise": 18.0,
-		"aggro": 110.0, "stop": 30.0, "radius": 5.0, "ash": 6,
+		"aggro": 110.0, "stop": 30.0, "radius": 5.0, "gold": 3,
 		"attacks": [
 			{"type": "dash", "range": 55.0, "windup": 0.45, "active": 0.28, "recover": 0.9, "dmg": 16.0, "dash": 190.0},
 		],
 	},
 	"spear": {
 		"name": "Копейщик", "sprite": "spear", "hp": 85.0, "speed": 22.0, "poise": 45.0,
-		"aggro": 80.0, "stop": 28.0, "radius": 5.0, "ash": 10,
+		"aggro": 80.0, "stop": 28.0, "radius": 5.0, "gold": 6,
 		"attacks": [
 			{"type": "arc", "range": 34.0, "reach": 42.0, "arc": 22.0, "windup": 0.9, "active": 0.12, "recover": 1.0, "dmg": 22.0},
 		],
 	},
 	"spitter": {
 		"name": "Плевальщица", "sprite": "spitter", "hp": 40.0, "speed": 24.0, "poise": 15.0,
-		"aggro": 120.0, "stop": 80.0, "radius": 5.0, "ash": 8, "ranged": true,
+		"aggro": 120.0, "stop": 80.0, "radius": 5.0, "gold": 5, "ranged": true,
 		"attacks": [
 			{"type": "shot", "range": 95.0, "windup": 1.0, "active": 0.05, "recover": 1.6, "dmg": 11.0, "speed": 120.0},
 		],
 	},
 	"lord": {
 		"name": "Владыка Озера", "sprite": "lord", "scale": 2.0, "boss": true, "hp": 900.0, "speed": 30.0,
-		"poise": 220.0, "aggro": 9999.0, "stop": 26.0, "radius": 11.0, "ash": 300,
+		"poise": 220.0, "aggro": 9999.0, "stop": 26.0, "radius": 11.0, "gold": 150,
 		"attacks": [
 			{"type": "arc", "range": 34.0, "reach": 46.0, "arc": 110.0, "windup": 0.85, "active": 0.15, "recover": 1.0, "dmg": 28.0},
 			{"type": "aoe", "range": 95.0, "windup": 1.1, "active": 0.1, "recover": 1.3, "dmg": 32.0, "radius": 26.0},
@@ -50,7 +50,7 @@ var def: Dictionary = {}
 var hp := 1.0
 var max_hp := 1.0
 var radius := 5.0
-var ash := 0
+var gold := 0
 var state := "move"
 var state_t := 0.0
 var facing := Vector2.DOWN
@@ -74,10 +74,10 @@ var summon_t := 6.0
 func setup(k: String, night: int) -> void:
 	kind = k
 	def = DEFS[k]
-	max_hp = def.hp * (1.0 + 0.08 * (night - 1))
+	max_hp = def.hp * (1.0 + 0.15 * (night - 1))
 	hp = max_hp
 	radius = def.radius
-	ash = int(def.ash * (1.0 + 0.1 * (night - 1)))
+	gold = int(def.gold * (1.0 + 0.1 * (night - 1)))
 	cooldown = randf_range(0.2, 0.8)
 
 

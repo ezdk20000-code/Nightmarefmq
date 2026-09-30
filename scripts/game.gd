@@ -1,5 +1,5 @@
 extends Node2D
-## Пепел Кордона — стратегия обороны с хардкорной сложностью в духе souls-like.
+## Оборона Кордона — стратегия обороны крепости в реальном времени.
 ## Игрок не сражается сам: он командует гарнизоном — расставляет героев и вовремя применяет их способности.
 ## Симуляция идёт только через step(), поэтому её можно гонять в тестах без ввода и рендера.
 
@@ -8,17 +8,16 @@ const H := 270
 const PANEL_Y := 238
 const CARD_W := 79
 const TOWER_SLOTS := [Vector2(128, 218), Vector2(352, 218)]
-const BEACONS := [1, 4]
 const LAST_NIGHT := 6
 const MAX_HEROES := 6
 const ABILITY_RANGE_MULT := 1.5
 const NIGHT_PLAN := {
-	1: {"husk": 6},
-	2: {"husk": 6, "hound": 3},
-	3: {"husk": 6, "hound": 4, "spitter": 2},
-	4: {"husk": 6, "hound": 4, "spear": 3, "spitter": 2},
-	5: {"husk": 8, "hound": 5, "spear": 4, "spitter": 3},
-	6: {"lord": 1, "husk": 4, "spitter": 2},
+	1: {"husk": 8},
+	2: {"husk": 9, "hound": 5},
+	3: {"husk": 10, "hound": 6, "spitter": 3},
+	4: {"husk": 10, "hound": 6, "spear": 5, "spitter": 4},
+	5: {"husk": 14, "hound": 8, "spear": 6, "spitter": 5},
+	6: {"lord": 1, "husk": 8, "spitter": 4},
 }
 const HERO_NAMES := ["Альрик", "Бренна", "Кассиан", "Дара", "Эйвин", "Фрея", "Гаррет", "Хельга", "Ивар", "Йорн",
 	"Кира", "Лиан", "Мирра", "Норд", "Ольга", "Рейн", "Сигрид", "Торин", "Ульф", "Вера", "Зоран", "Ярослава"]
@@ -44,7 +43,6 @@ var particles: Array = []
 var floaters: Array = []
 var shake := 0.0
 var fall_timer := -1.0
-var fall_note := ""
 var banner := ""
 var banner_t := 0.0
 var t := 0.0
@@ -247,11 +245,11 @@ func _hit_gate(dmg: float) -> void:
 
 func on_enemy_killed(e: Enemy, src) -> void:
 	enemies.erase(e)
-	Save.data.ash = int(Save.data.ash) + e.ash
-	floater(e.position + Vector2(0, -22), "+%d" % e.ash, Color("ffcd75"))
+	Save.data.gold = int(Save.data.gold) + e.gold
+	floater(e.position + Vector2(0, -22), "+%d" % e.gold, Color("ffcd75"))
 	_burst(e.position + Vector2(0, -5), [Color("3d4a4f"), Color("ef7d57"), Color("1a1c2c")], 14 if not e.is_boss() else 50, 60.0)
 	if src is Hero and is_instance_valid(src) and not src.dead:
-		src.gain_xp(e.ash, self)
+		src.gain_xp(e.gold, self)
 	if e == boss:
 		boss = null
 		show_banner("ВЛАДЫКА ПОВЕРЖЕН")
@@ -275,7 +273,6 @@ func on_hero_died(h: Hero) -> void:
 			break
 	Save.data.fallen.append({"name": h.data.name, "cls": h.data.cls, "rarity": int(h.data.rarity),
 		"lvl": int(h.data.lvl), "night": night})
-	Save.save_game()
 	show_banner("ПОТЕРЯ: %s" % str(h.data.name).to_upper())
 	_burst(h.position + Vector2(0, -5), [Color("e43b44"), Color("b13e53"), h.rarity_color()], 20, 60.0)
 	if selected == h:
@@ -465,20 +462,19 @@ func new_game() -> void:
 	Save.reset()
 	Save.data.started = true
 	Save.data.roster = [make_hero("knight", 1), make_hero("archer", 0), make_hero("priest", 0)]
-	Save.save_game()
-	go_beacon()
+	go_day()
 
 
-## Маяк: все выжившие исцелены, прогресс сохранён.
-func go_beacon() -> void:
-	screen = "beacon"
+## День между ночами: герои исцелены, ворота починены, прогресс сохранён.
+func go_day() -> void:
+	screen = "day"
 	paused = false
 	menu_idx = 0
-	night = int(Save.data.beacon_night)
-	# Сложно, но без тупиков: если гарнизон почти истреблён, к маяку приходят добровольцы.
+	night = int(Save.data.night)
+	# Без тупиков: если гарнизон почти истреблён, в крепость приходят добровольцы.
 	while Save.data.roster.size() < 2:
 		Save.data.roster.append(make_hero(["knight", "archer"][Save.data.roster.size()], 0))
-		show_banner("К МАЯКУ ПРИШЛИ ДОБРОВОЛЬЦЫ")
+		show_banner("В КРЕПОСТЬ ПРИШЛИ ДОБРОВОЛЬЦЫ")
 	for r in Save.data.roster:
 		r.hp = null
 	Save.save_game()
@@ -506,7 +502,7 @@ func _default_pos(d: Dictionary, i: int) -> Vector2:
 	return Vector2(150 + 36 * i, 226)
 
 
-func start_night(n: int, fresh: bool) -> void:
+func start_night(n: int) -> void:
 	_clear_world()
 	night = n
 	night_t = 0.0
@@ -515,8 +511,7 @@ func start_night(n: int, fresh: bool) -> void:
 	fall_timer = -1.0
 	schedule = build_schedule(n)
 	gate_max = 300.0 + 60.0 * int(Save.data.gate_level)
-	if fresh:
-		gate_hp = gate_max
+	gate_hp = gate_max
 	var roster: Array = Save.data.roster
 	for i in roster.size():
 		var d: Dictionary = roster[i]
@@ -531,6 +526,12 @@ func start_night(n: int, fresh: bool) -> void:
 	show_banner("НОЧЬ %d" % n)
 
 
+## Переиграть ночь: состояние откатывается к началу дня (сохранение делается только днём).
+func retry_night() -> void:
+	Save.load_game()
+	start_night(int(Save.data.night))
+
+
 func _sync_heroes() -> void:
 	for h in heroes:
 		h.data.hp = h.hp
@@ -540,58 +541,34 @@ func _sync_heroes() -> void:
 
 func _fall() -> void:
 	fall_timer = 1.6
-	fall_note = ""
-	var d := Save.data
-	if int(d.dropped_ash) > 0:
-		fall_note = "Прежний пепел (%d) развеян навсегда." % int(d.dropped_ash)
-	d.dropped_ash = int(d.ash)
-	d.ash = 0
-	d.defeats = int(d.defeats) + 1
-	_sync_heroes()
-	Save.save_game()
 	shake = 0.4
 
 
 func _night_won() -> void:
 	_sync_heroes()
-	if int(Save.data.dropped_ash) > 0:
-		Save.data.ash = int(Save.data.ash) + int(Save.data.dropped_ash)
-		Save.data.dropped_ash = 0
-		show_banner("ПЕПЕЛ ВОЗВРАЩЁН")
 	if night >= LAST_NIGHT:
 		screen = "victory"
 		menu_idx = 0
 		Save.data.completed = true
 		Save.save_game()
 		return
-	night += 1
-	gate_hp = minf(gate_max, gate_hp + gate_max * 0.25)
-	for r in Save.data.roster:
-		var mx := Hero.max_hp_for(r)
-		r.hp = mx if r.hp == null else minf(mx, float(r.hp) + mx * 0.25)
-	if night in BEACONS:
-		Save.data.beacon_night = night
-		go_beacon()
-		show_banner("МАЯК ЗАЖЖЁН")
-	else:
-		screen = "dawn"
-		menu_idx = 0
-		Save.save_game()
-		world.visible = false
+	Save.data.night = night + 1
+	go_day()
+	show_banner("РАССВЕТ")
 
 
 func level_cost(d: Dictionary) -> int:
 	return 20 * int(d.lvl)
 
 
-func beacon_options() -> Array:
+func day_options() -> Array:
 	var d := Save.data
 	var roster: Array = d.roster
 	var towers := int(d.towers)
 	var g := int(d.gate_level)
 	return [
-		{"id": "start", "label": "Встать в дозор — ночь %d" % night, "cost": 0, "locked": roster.is_empty()},
-		{"id": "recruit", "label": "Призвать героя  (%d/%d)" % [roster.size(), MAX_HEROES], "cost": 50 + 25 * int(d.recruits),
+		{"id": "start", "label": "Начать ночь %d" % night, "cost": 0, "locked": roster.is_empty()},
+		{"id": "recruit", "label": "Нанять героя  (%d/%d)" % [roster.size(), MAX_HEROES], "cost": 70 + 35 * int(d.recruits),
 			"locked": roster.size() >= MAX_HEROES},
 		{"id": "train_menu", "label": "Тренировать героев…", "cost": 0},
 		{"id": "tower", "label": "Лучник на башню  (%d/2)" % towers, "cost": 70 + 50 * towers, "locked": towers >= 2},
@@ -611,15 +588,15 @@ func train_options() -> Array:
 
 
 ## Возвращает true, если покупка прошла.
-func beacon_buy(id: String) -> bool:
-	var opts := train_options() if id.begins_with("train:") else beacon_options()
+func day_buy(id: String) -> bool:
+	var opts := train_options() if id.begins_with("train:") else day_options()
 	var opt: Dictionary = {}
 	for o in opts:
 		if o.id == id:
 			opt = o
-	if opt.is_empty() or opt.get("locked", false) or int(Save.data.ash) < opt.cost:
+	if opt.is_empty() or opt.get("locked", false) or int(Save.data.gold) < opt.cost:
 		return false
-	Save.data.ash = int(Save.data.ash) - opt.cost
+	Save.data.gold = int(Save.data.gold) - opt.cost
 	if id.begins_with("train:"):
 		for r in Save.data.roster:
 			if "train:%d" % int(r.id) == id:
@@ -652,25 +629,24 @@ func current_options() -> Array:
 		"title":
 			var o: Array = []
 			if Save.data.started and not Save.data.completed:
-				o.append({"id": "continue", "label": "Продолжить  (маяк ночи %d)" % int(Save.data.beacon_night)})
+				o.append({"id": "continue", "label": "Продолжить  (ночь %d)" % int(Save.data.night)})
 			o.append({"id": "new", "label": "Новая игра"})
 			o.append({"id": "quit", "label": "Выход"})
 			return o
-		"beacon":
-			return beacon_options()
+		"day":
+			return day_options()
 		"train":
 			return train_options()
-		"dawn":
-			return [{"id": "next", "label": "Выступить — ночь %d" % night}]
 		"dead":
-			return [{"id": "to_beacon", "label": "Вернуться к маяку"}]
+			return [{"id": "retry", "label": "Переиграть ночь %d" % night}, {"id": "menu", "label": "Главное меню"}]
 		"victory":
 			return [{"id": "menu", "label": "В главное меню"}]
 		"night":
 			if paused:
 				return [
 					{"id": "resume", "label": "Продолжить"},
-					{"id": "forfeit", "label": "Сдать крепость  (засчитается как поражение)"},
+					{"id": "retry", "label": "Начать ночь заново"},
+					{"id": "menu", "label": "Выйти в главное меню"},
 				]
 	return []
 
@@ -767,37 +743,35 @@ func hero_at(p: Vector2) -> Hero:
 
 func _activate(o: Dictionary) -> void:
 	match o.id:
-		"continue", "to_beacon":
-			go_beacon()
+		"continue":
+			go_day()
 		"new":
 			new_game()
 		"quit":
 			get_tree().quit()
 		"start":
 			if not o.get("locked", false):
-				start_night(night, true)
+				start_night(night)
+		"retry":
+			retry_night()
 		"menu":
+			# Незавершённая ночь не сохраняется: в меню возвращаемся к состоянию начала дня.
+			Save.load_game()
+			_clear_world()
 			screen = "title"
+			paused = false
 			menu_idx = 0
 			world.visible = false
 		"train_menu":
 			screen = "train"
 			menu_idx = 0
 		"back":
-			screen = "beacon"
+			screen = "day"
 			menu_idx = 2
-		"next":
-			start_night(night, false)
 		"resume":
 			paused = false
-		"forfeit":
-			paused = false
-			_fall()
-			fall_timer = -1.0
-			screen = "dead"
-			menu_idx = 0
 		_:
-			if not beacon_buy(o.id):
+			if not day_buy(o.id):
 				shake = 0.1
 
 
@@ -950,7 +924,7 @@ func _center(s: String, y: float, size: int, col: Color) -> void:
 
 
 func _draw_menu(opts: Array, y0: float, show_cost: bool, x0: float = 80.0, width: float = 320.0) -> void:
-	var ash := int(Save.data.ash)
+	var gold := int(Save.data.gold)
 	menu_rects.clear()
 	for i in opts.size():
 		var o: Dictionary = opts[i]
@@ -958,7 +932,7 @@ func _draw_menu(opts: Array, y0: float, show_cost: bool, x0: float = 80.0, width
 		menu_rects.append(Rect2(x0 - 4, y - 11, width + 8, 14))
 		var sel := i == menu_idx
 		var cost: int = o.get("cost", 0)
-		var ok: bool = not o.get("locked", false) and ash >= cost
+		var ok: bool = not o.get("locked", false) and gold >= cost
 		var col := Color("ffcd75") if sel else (Color("e8e3d6") if ok else Color("6b6478"))
 		if sel:
 			hud.draw_rect(Rect2(x0 - 4, y - 11, width + 8, 14), Color(1, 0.8, 0.46, 0.08))
@@ -966,7 +940,7 @@ func _draw_menu(opts: Array, y0: float, show_cost: bool, x0: float = 80.0, width
 			hud.draw_rect(Rect2(x0 + 2, y - 7, 4, 4), Hero.RARITY[o.rarity].color)
 		_text(hud, ("> " if sel else "  ") + o.label, Vector2(x0 + (6 if o.has("rarity") else 0), y), 10, col)
 		if show_cost and cost > 0:
-			var right: String = "макс." if o.get("locked", false) else "%d пепла" % cost
+			var right: String = "макс." if o.get("locked", false) else "%d золота" % cost
 			_text(hud, right, Vector2(x0 + width - 100, y), 10, col, HORIZONTAL_ALIGNMENT_RIGHT, 100)
 
 
@@ -974,25 +948,20 @@ func _draw_hud() -> void:
 	match screen:
 		"title":
 			_hud_title()
-		"beacon", "train":
-			_hud_beacon()
-		"dawn":
-			_hud_dawn()
+		"day", "train":
+			_hud_day()
 		_:
 			_hud_battle()
 			match screen:
 				"dead":
 					hud.draw_rect(Rect2(0, 96, W, 64), Color(0, 0, 0, 0.8))
 					_center("КОРДОН ПАЛ", 134, 32, Color("b13e53"))
-					if fall_note != "":
-						_center(fall_note, 176, 10, Color("9a93ad"))
-					if int(Save.data.dropped_ash) > 0:
-						_center("Пепел (%d) остался у павших ворот. Выиграй следующую ночь — и вернёшь его." % int(Save.data.dropped_ash), 190, 8, Color("ef7d57"))
+					_center("Можно переиграть ночь с начала — всё вернётся к утру этого дня.", 180, 8, Color("9a93ad"))
 					_draw_menu(current_options(), 212, false, 160, 160)
 				"victory":
 					_overlay(0.75)
 					_center("ВЛАДЫКА ОЗЕРА ПАЛ", 100, 24, Color("ffcd75"))
-					_center("Конец демо-версии. Поражений: %d · Павших героев: %d" % [int(Save.data.defeats), Save.data.fallen.size()], 124, 10, Color("e8e3d6"))
+					_center("Конец демо-версии. Павших героев: %d" % Save.data.fallen.size(), 124, 10, Color("e8e3d6"))
 					_draw_menu(current_options(), 160, false, 160, 160)
 			if paused:
 				_overlay(0.6)
@@ -1010,7 +979,7 @@ func _bar(x: float, y: float, w: float, frac: float, col: Color, h: float = 3.0)
 
 
 func _hud_battle() -> void:
-	_text(hud, "ПЕПЕЛ  %d" % int(Save.data.ash), Vector2(6, 12), 10, Color("ffcd75"))
+	_text(hud, "ЗОЛОТО  %d" % int(Save.data.gold), Vector2(6, 12), 10, Color("ffcd75"))
 	_text(hud, "ВОРОТА", Vector2(0, 9), 8, Color("9a93ad"), HORIZONTAL_ALIGNMENT_CENTER, W)
 	_bar(190, 12, 100, gate_hp / gate_max, Color("8b9bb4"), 2.0)
 	_text(hud, "НОЧЬ %d / %d" % [night, LAST_NIGHT], Vector2(W - 106, 12), 8, Color("9a93ad"), HORIZONTAL_ALIGNMENT_RIGHT, 100)
@@ -1045,27 +1014,22 @@ func _hud_title() -> void:
 		var x := fmod(i * 97.0, W)
 		var y := H - fmod(t * (12.0 + i % 7) + i * 53.0, H)
 		hud.draw_rect(Rect2(x + sin(t + i) * 3.0, y, 1, 1), Color("ef7d57", 0.3 + 0.5 * fmod(i * 0.37, 1.0)))
-	_center("ПЕПЕЛ КОРДОНА", 90, 32, Color("ffcd75"))
-	_center("Командуй. Теряй. Выстой.", 110, 10, Color("9a93ad"))
+	_center("ОБОРОНА КОРДОНА", 90, 32, Color("ffcd75"))
+	_center("Стратегия обороны крепости", 110, 10, Color("9a93ad"))
 	_draw_menu(current_options(), 150, false, 150, 180)
-	_text(hud, "v0.2 — вертикальный срез", Vector2(6, H - 6), 8, Color("3a3350"))
+	_text(hud, "v0.4 — вертикальный срез", Vector2(6, H - 6), 8, Color("3a3350"))
 
 
-func _hud_beacon() -> void:
-	hud.draw_rect(Rect2(0, 0, W, H), Color("0e0c14"))
-	var fl := sin(t * 9.0) * 0.5 + 0.5
-	hud.draw_circle(Vector2(30, 150), 22.0 + fl * 4.0, Color("ef7d57", 0.10))
-	hud.draw_circle(Vector2(30, 150), 10.0 + fl * 2.0, Color("ef7d57", 0.25))
-	hud.draw_rect(Rect2(26, 150, 8, 30), Color("3a414c"))
-	hud.draw_rect(Rect2(27, 140 - fl * 3.0, 6, 10), Color("ffcd75"))
+func _hud_day() -> void:
+	hud.draw_rect(Rect2(0, 0, W, H), Color("141019"))
 	var d := Save.data
-	_center("МАЯК  ·  НОЧЬ %d" % night, 24, 16, Color("ffcd75"))
-	_center("Пепел: %d" % int(d.ash), 38, 10, Color("ef7d57"))
+	_center("ДЕНЬ  ·  ВПЕРЕДИ НОЧЬ %d" % night, 24, 16, Color("ffcd75"))
+	_center("Золото: %d" % int(d.gold), 38, 10, Color("ffcd75"))
 	if screen == "train":
 		_text(hud, "ТРЕНИРОВКА", Vector2(60, 58), 8, Color("9a93ad"))
 		_draw_menu(train_options(), 74, true, 60, 360)
 	else:
-		_draw_menu(beacon_options(), 62, true, 60, 250)
+		_draw_menu(day_options(), 62, true, 30, 280)
 		_text(hud, "ГАРНИЗОН", Vector2(330, 58), 8, Color("9a93ad"))
 		var roster: Array = d.roster
 		for i in roster.size():
@@ -1079,24 +1043,5 @@ func _hud_beacon() -> void:
 			for i in mini(fallen.size(), 4):
 				var f: Dictionary = fallen[fallen.size() - 1 - i]
 				_text(hud, "† %s, ночь %d" % [f.name, int(f.night)], Vector2(330, 170 + i * 10), 8, Color("6b6478"))
-	_center("Разведка, ночь %d: %s" % [night, scout(night)], 216, 8, Color("9a93ad"))
-	if int(d.dropped_ash) > 0:
-		_center("У павших ворот лежит %d пепла. Выиграй следующую ночь — и вернёшь его." % int(d.dropped_ash), 230, 8, Color("ef7d57"))
-	_center("Мышь или W/S + E  ·  Поражений: %d" % int(d.defeats), 258, 8, Color("3a3350"))
-
-
-func _hud_dawn() -> void:
-	hud.draw_rect(Rect2(0, 0, W, H), Color("141019"))
-	_center("РАССВЕТ", 70, 24, Color("ffcd75"))
-	_center("Ночь %d пережита. Раны затянулись лишь на четверть, ворота — тоже." % (night - 1), 94, 8, Color("e8e3d6"))
-	_center("Разведка, ночь %d: %s" % [night, scout(night)], 110, 8, Color("9a93ad"))
-	var roster: Array = Save.data.roster
-	for i in roster.size():
-		var r: Dictionary = roster[i]
-		var mx := Hero.max_hp_for(r)
-		var hpv: float = mx if r.hp == null else float(r.hp)
-		var x := 60.0 + (i % 3) * 124.0
-		var y := 130.0 + (i / 3) * 20.0
-		_text(hud, "%s · %s" % [r.name, Hero.CLASSES[r.cls].name], Vector2(x, y), 8, Hero.RARITY[int(r.rarity)].color)
-		_bar(x, y + 3, 100, hpv / mx, Color("7ee081") if hpv > mx * 0.35 else Color("e43b44"), 2.0)
-	_draw_menu(current_options(), 200, false, 160, 160)
+	_center("Разведка, ночь %d: %s" % [night, scout(night)], 222, 8, Color("9a93ad"))
+	_center("Мышь или W/S + E", 258, 8, Color("3a3350"))

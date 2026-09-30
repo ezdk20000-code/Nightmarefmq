@@ -10,8 +10,8 @@ config_version=5
 
 [application]
 
-config/name="Пепел Кордона"
-config/description="Хардкорная экшен-оборона в духе souls-like."
+config/name="Оборона Кордона"
+config/description="Стратегия обороны крепости."
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.5", "GL Compatibility")
 

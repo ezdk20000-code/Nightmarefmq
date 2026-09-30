@@ -1,5 +1,5 @@
 extends Node
-## Сохранение прогресса. Одна ячейка, ручных сейвов нет: всё пишется автоматически, как в souls-like.
+## Сохранение прогресса. Автосохранение в начале каждого дня; незавершённая ночь не сохраняется.
 
 var path := "user://save.json"
 var data: Dictionary = {}
@@ -11,19 +11,17 @@ func _ready() -> void:
 
 func defaults() -> Dictionary:
 	return {
-		"version": 2,
+		"version": 3,
 		"started": false,
 		"completed": false,
-		"beacon_night": 1,
-		"ash": 0,
-		"dropped_ash": 0,
+		"night": 1,
+		"gold": 0,
 		"roster": [],
 		"fallen": [],
 		"next_id": 1,
 		"recruits": 0,
 		"towers": 0,
 		"gate_level": 0,
-		"defeats": 0,
 	}
 
 

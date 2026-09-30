@@ -18,15 +18,14 @@ func _ready() -> void:
 	game.new_game()
 	Save.data.roster.append(game.make_hero("mage", 3))
 	Save.data.roster.append(game.make_hero("archer", 2))
-	Save.data.ash = 140
-	Save.data.dropped_ash = 63
+	Save.data.gold = 140
 	Save.data.fallen.append({"name": "Торин", "cls": "knight", "rarity": 1, "lvl": 3, "night": 2})
-	game.go_beacon()
+	game.go_day()
 	await _wait(10)
-	await _shot("2_beacon")
+	await _shot("2_day")
 	Save.data.towers = 1
 	game.manual = true
-	game.start_night(3, true)
+	game.start_night(3)
 	game.schedule.clear()
 	var k: Hero = game.heroes[0]
 	k.position = Vector2(240, 150)
@@ -38,7 +37,7 @@ func _ready() -> void:
 	game.targeting = game.heroes[3]
 	await _shot("3_night")
 	game.targeting = null
-	game.start_night(6, true)
+	game.start_night(6)
 	for i in 420:
 		game.step(1.0 / 60.0)
 		await get_tree().process_frame

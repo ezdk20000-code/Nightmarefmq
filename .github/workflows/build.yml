@@ -41,15 +41,15 @@ jobs:
       - name: Сборка Windows и Linux
         run: |
           mkdir -p build/windows build/linux
-          godot --headless --export-release "Windows" build/windows/PepelKordona.exe
-          godot --headless --export-release "Linux" build/linux/PepelKordona.x86_64
+          godot --headless --export-release "Windows" build/windows/OboronaKordona.exe
+          godot --headless --export-release "Linux" build/linux/OboronaKordona.x86_64
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PepelKordona-windows
+          name: OboronaKordona-windows
           path: build/windows
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PepelKordona-linux
+          name: OboronaKordona-linux
           path: build/linux

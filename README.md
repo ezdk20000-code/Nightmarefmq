@@ -1,10 +1,10 @@
-# Пепел Кордона
+# Оборона Кордона (рабочее название)
 
-Стратегия обороны с хардкорной сложностью уровня souls-like. Делается на **Godot 4.5** под **Steam** (Windows, Linux, Steam Deck).
+Хардкорная стратегия обороны крепости в реальном времени. Делается на **Godot 4.5** под **Steam** (Windows, Linux, Steam Deck).
 
 Ты — опальный принц в крепости Кордон на краю Озера Чудовищ. Каждую ночь из воды выходят твари.
-Ты не сражаешься сам: расставляешь героев и вовремя применяешь их способности. Павшие герои не возвращаются,
-а после поражения весь пепел остаётся у павших ворот.
+Ты не сражаешься сам: днём нанимаешь и тренируешь героев, укрепляешь крепость, ночью расставляешь
+героев и вовремя применяешь их способности. Павшие герои не возвращаются, но проигранную ночь можно переиграть.
 
 Подробности — в [дизайн-документе](docs/GDD.md). План выхода в Steam — в [docs/STEAM.md](docs/STEAM.md).
 
@@ -25,15 +25,15 @@
 ```bash
 godot --editor project.godot                  # открыть в редакторе
 godot --headless res://tests/tests.tscn       # автотесты (код выхода 0 = всё ок)
-godot --headless --export-release "Windows" build/windows/PepelKordona.exe
-godot --headless --export-release "Linux"   build/linux/PepelKordona.x86_64
+godot --headless --export-release "Windows" build/windows/OboronaKordona.exe
+godot --headless --export-release "Linux"   build/linux/OboronaKordona.x86_64
 ```
 
 GitHub Actions при каждом пуше прогоняет тесты и собирает Windows- и Linux-версии (вкладка **Actions** → артефакты).
 
 ## Структура
 
-- `scripts/game.gd` — ночи, маяки, поражения, приказы, HUD и меню
+- `scripts/game.gd` — дни и ночи, приказы, экономика, HUD и меню
 - `scripts/hero.gd` — герои: классы, редкость, приказы, способности
 - `scripts/enemy.gd` — враги и босс, выбор цели, телеграфы атак
 - `scripts/save.gd` — автосохранение
