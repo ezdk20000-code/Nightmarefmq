@@ -15,24 +15,31 @@ func _ready() -> void:
 	add_child(game)
 	await _wait(20)
 	await _shot("1_title")
-	Save.data.started = true
+	game.new_game()
+	Save.data.roster.append(game.make_hero("mage", 3))
+	Save.data.roster.append(game.make_hero("archer", 2))
 	Save.data.ash = 140
-	Save.data.dropped = {"x": 150.0, "y": 120.0, "amount": 63}
+	Save.data.dropped_ash = 63
+	Save.data.fallen.append({"name": "Торин", "cls": "knight", "rarity": 1, "lvl": 3, "night": 2})
 	game.go_beacon()
 	await _wait(10)
 	await _shot("2_beacon")
-	Save.data.towers = 2
-	game.start_night(3, true)
+	Save.data.towers = 1
 	game.manual = true
-	for i in 7:
-		game.spawn(["husk", "hound", "spear"][i % 3], Vector2(120 + i * 35, 90 + (i % 3) * 25))
-	for i in 150:
+	game.start_night(3, true)
+	game.schedule.clear()
+	var k: Hero = game.heroes[0]
+	k.position = Vector2(240, 150)
+	for i in 8:
+		game.spawn(["husk", "hound", "spitter", "husk"][i % 4], Vector2(150 + i * 25, 70 + (i % 3) * 20))
+	for i in 200:
 		game.step(1.0 / 60.0)
 		await get_tree().process_frame
-	game.player.state = "parry"
+	game.targeting = game.heroes[3]
 	await _shot("3_night")
+	game.targeting = null
 	game.start_night(6, true)
-	for i in 400:
+	for i in 420:
 		game.step(1.0 / 60.0)
 		await get_tree().process_frame
 	await _shot("4_boss")

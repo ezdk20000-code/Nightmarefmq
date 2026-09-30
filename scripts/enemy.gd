@@ -1,7 +1,8 @@
 class_name Enemy
 extends Node2D
 ## Враг. Каждая атака честно телеграфируется: контур удара на земле во время замаха
-## и красная вспышка за мгновение до удара. Цель — принц (если близко) или ворота.
+## и красная вспышка за мгновение до удара — у игрока есть время отвести героя.
+## Цель — ближайший герой в поле (стрелки достают и до стены), иначе ворота.
 
 const GLINT_TIME := 0.12
 
@@ -27,13 +28,20 @@ static var DEFS := {
 			{"type": "arc", "range": 34.0, "reach": 42.0, "arc": 22.0, "windup": 0.9, "active": 0.12, "recover": 1.0, "dmg": 30.0},
 		],
 	},
+	"spitter": {
+		"name": "Плевальщица", "sprite": "spitter", "hp": 40.0, "speed": 24.0, "poise": 15.0,
+		"aggro": 120.0, "stop": 80.0, "radius": 5.0, "ash": 8, "ranged": true,
+		"attacks": [
+			{"type": "shot", "range": 95.0, "windup": 1.0, "active": 0.05, "recover": 1.2, "dmg": 18.0, "speed": 120.0},
+		],
+	},
 	"lord": {
 		"name": "Владыка Озера", "sprite": "lord", "scale": 2.0, "boss": true, "hp": 900.0, "speed": 30.0,
 		"poise": 220.0, "aggro": 9999.0, "stop": 26.0, "radius": 11.0, "ash": 300,
 		"attacks": [
 			{"type": "arc", "range": 34.0, "reach": 46.0, "arc": 110.0, "windup": 0.85, "active": 0.15, "recover": 0.9, "dmg": 35.0},
-			{"type": "aoe", "range": 95.0, "windup": 1.1, "active": 0.1, "recover": 1.1, "dmg": 45.0, "radius": 32.0, "parryable": false},
-			{"type": "dash", "range": 140.0, "windup": 0.75, "active": 0.55, "recover": 1.3, "dmg": 40.0, "dash": 230.0, "parryable": false, "phase": 2},
+			{"type": "aoe", "range": 95.0, "windup": 1.1, "active": 0.1, "recover": 1.1, "dmg": 45.0, "radius": 32.0},
+			{"type": "dash", "range": 140.0, "windup": 0.75, "active": 0.55, "recover": 1.3, "dmg": 40.0, "dash": 230.0, "phase": 2},
 		],
 	},
 }
@@ -51,13 +59,15 @@ var atk: Dictionary = {}
 var atk_dir := Vector2.DOWN
 var atk_origin := Vector2.ZERO
 var did_hit := false
-var riposte := false
 var stagger_time := 0.0
 var poise_acc := 0.0
 var poise_t := 0.0
 var cooldown := 0.0
 var flash := 0.0
-var target_gate := true
+## Текущая цель-герой; null — идёт на ворота.
+var target: Hero = null
+var taunted_by: Hero = null
+var taunt_t := 0.0
 var phase := 1
 var summon_t := 6.0
 
@@ -76,24 +86,53 @@ func is_boss() -> bool:
 	return def.get("boss", false)
 
 
+func is_ranged() -> bool:
+	return def.get("ranged", false)
+
+
 func windup_time() -> float:
 	if atk.is_empty():
 		return 0.0
 	return atk.windup * (0.75 if phase == 2 else 1.0)
 
 
+func taunt(h: Hero, time: float) -> void:
+	taunted_by = h
+	taunt_t = time
+
+
+func _target_valid() -> bool:
+	return target != null and is_instance_valid(target) and not target.dead
+
+
+func _pick_target(game) -> void:
+	if taunt_t > 0.0 and taunted_by != null and is_instance_valid(taunted_by) and not taunted_by.dead:
+		target = taunted_by
+		return
+	target = null
+	var best: float = def.aggro
+	for h in game.heroes:
+		if h.dead or (h.on_wall() and not is_ranged()):
+			continue
+		var d := position.distance_to(h.position)
+		if d < best:
+			best = d
+			target = h
+
+
 func tick(dt: float, game) -> void:
 	state_t += dt
 	flash = maxf(0.0, flash - dt)
 	cooldown -= dt
+	taunt_t = maxf(0.0, taunt_t - dt)
 	poise_t -= dt
 	if poise_t <= 0.0:
 		poise_acc = 0.0
 	if state == "dead":
 		return
-	var p: Player = game.player
-	target_gate = p.state == "dead" or position.distance_to(p.position) > def.aggro
-	var tpos: Vector2 = Combat.GATE_POS if target_gate else p.position
+	if state == "move":
+		_pick_target(game)
+	var tpos: Vector2 = target.position if _target_valid() else Combat.GATE_POS
 	var to := tpos - position
 	var dist := to.length()
 	if kind == "lord" and phase == 2:
@@ -108,11 +147,14 @@ func tick(dt: float, game) -> void:
 			var a = _choose_attack(dist)
 			if a != null and cooldown <= 0.0:
 				_begin(a, tpos)
-			elif dist > (10.0 if target_gate else def.stop):
+			elif dist > (10.0 if target == null else def.stop):
 				position += facing * def.speed * (1.3 if phase == 2 else 1.0) * dt
 		"windup":
 			# Отслеживание цели только в начале замаха — дальше атака «зафиксирована».
-			if atk.type != "aoe" and state_t < windup_time() * 0.6 and dist > 0.01:
+			var tracking := state_t < windup_time() * (0.7 if atk.type == "shot" else 0.6)
+			if tracking and atk.type == "shot":
+				atk_origin = tpos
+			elif tracking and atk.type != "aoe" and dist > 0.01:
 				atk_dir = atk_dir.slerp(to / dist, minf(1.0, dt * 6.0))
 				facing = atk_dir
 			if state_t >= windup_time():
@@ -139,7 +181,6 @@ func tick(dt: float, game) -> void:
 			if state_t >= stagger_time:
 				state = "move"
 				state_t = 0.0
-				riposte = false
 	position = position.clamp(Combat.ENEMY_MIN, Combat.ENEMY_MAX)
 	queue_redraw()
 
@@ -149,7 +190,7 @@ func _choose_attack(dist: float) -> Variant:
 	for a in def.attacks:
 		if int(a.get("phase", 1)) > phase:
 			continue
-		var rng: float = maxf(a.range, 16.0) if target_gate else a.range
+		var rng: float = maxf(a.range, 16.0) if target == null else a.range
 		if dist <= rng:
 			opts.append(a)
 	if opts.is_empty():
@@ -165,25 +206,15 @@ func _begin(a: Dictionary, tpos: Vector2) -> void:
 	atk_origin = tpos
 
 
-func stagger(time: float, can_riposte: bool = false) -> void:
+func stagger(time: float) -> void:
 	state = "stagger"
 	state_t = 0.0
 	stagger_time = time
-	riposte = can_riposte
 
 
-func on_parried(_game) -> void:
-	stagger(0.9 if is_boss() else 1.6, true)
-
-
-func take_damage(dmg: float, poise: float, game, from_player: bool) -> void:
+func take_damage(dmg: float, poise: float, game, src) -> void:
 	if state == "dead":
 		return
-	var crit := riposte and from_player
-	if crit:
-		dmg *= 3.0
-		riposte = false
-		game.floater(position + Vector2(0, -24), "КРИТ", Color("ffcd75"))
 	hp -= dmg
 	flash = 0.1
 	game.floater(position + Vector2(randf_range(-4, 4), -14), str(int(dmg)), Color.WHITE)
@@ -193,10 +224,10 @@ func take_damage(dmg: float, poise: float, game, from_player: bool) -> void:
 		hp = 0.0
 		state = "dead"
 		state_t = 0.0
-		game.on_enemy_killed(self)
+		game.on_enemy_killed(self, src)
 		return
 	var armored := state == "active" or (is_boss() and state == "windup")
-	if crit or (poise_acc >= def.poise and not armored and state != "stagger"):
+	if poise_acc >= def.poise and not armored and state != "stagger":
 		poise_acc = 0.0
 		stagger(0.55)
 	if kind == "lord" and phase == 1 and hp < max_hp * 0.5:
@@ -222,9 +253,6 @@ func _draw() -> void:
 	var off := Vector2(sin(state_t * 60.0), 0) if state == "stagger" else Vector2.ZERO
 	Sprites.draw(self, Sprites.tex(def.sprite, flash > 0.0), off, facing.x < 0.0, Vector2(sc, sc), mod)
 	var top := -Sprites.tex(def.sprite).get_size().y * sc
-	if riposte:
-		draw_rect(Rect2(-1, top - 8, 2, 4), Color("ffcd75"))
-		draw_rect(Rect2(-1, top - 3, 2, 1), Color("ffcd75"))
 	if hp < max_hp and not is_boss() and state != "dead":
 		draw_rect(Rect2(-5, top - 3, 10, 2), Color("1a1c2c"))
 		draw_rect(Rect2(-5, top - 3, 10.0 * hp / max_hp, 1), Color("e43b44"))
@@ -250,3 +278,7 @@ func _draw_telegraph() -> void:
 			draw_arc(c, atk.radius, 0.0, TAU, 32, line, 1.0)
 		"dash":
 			draw_line(Vector2(0, -3), Vector2(0, -3) + atk_dir * atk.dash * atk.active, line, 1.0)
+		"shot":
+			var c := atk_origin - position
+			draw_line(Vector2(0, -6), c, Color(line, line.a * 0.5), 1.0)
+			draw_arc(c, 9.0, 0.0, TAU, 16, line, 1.0)

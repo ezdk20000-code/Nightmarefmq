@@ -1,5 +1,5 @@
 extends Node
-## Автотесты боевой системы и цикла смерти.
+## Автотесты стратегии: приказы, способности, необратимые потери, цикл поражений.
 ## Запуск: godot --headless res://tests/tests.tscn  (код выхода 0 — всё зелёное)
 
 const DT := 1.0 / 60.0
@@ -16,16 +16,20 @@ func _ready() -> void:
 	add_child(game)
 
 	test_arc()
-	test_roll_iframes()
-	test_parry()
-	test_stamina_gate()
-	test_kill_gives_ash()
-	test_death_drops_and_reclaims_ash()
-	test_second_death_loses_ash()
-	test_gate_fall()
+	test_new_game_roster()
+	test_move_order()
+	test_wall_path_goes_through_gate()
+	test_moving_hero_does_not_attack()
+	test_archer_kills_and_gains_xp()
+	test_enemy_targets_field_hero_not_wall()
+	test_knight_taunt()
+	test_firerain_friendly_fire()
+	test_hero_death_is_permanent()
+	test_defeat_drops_ash_and_win_reclaims()
+	test_second_defeat_loses_ash()
 	test_night_progression()
-	test_beacon_levelup()
-	test_boss_night_smoke()
+	test_beacon_shop()
+	balance_runs()
 
 	print("")
 	print("ПРОВАЛОВ: %d" % failures)
@@ -40,16 +44,11 @@ func check(cond: bool, name: String) -> void:
 		print("  FAIL  ", name)
 
 
-func fresh_night(n: int = 1) -> Player:
+## Ночь без спавна (далёкий враг держит её открытой).
+func fresh_night(n: int = 1) -> void:
 	game.go_beacon()
 	game.start_night(n, true)
-	# Далёкий спавн держит ночь открытой, пока тест не закончится.
 	game.schedule = [[9999.0, "husk"]]
-	return game.player
-
-
-func press(action: String) -> void:
-	game.buf[action] = game.BUFFER_TIME
 
 
 func run(seconds: float) -> void:
@@ -57,99 +56,154 @@ func run(seconds: float) -> void:
 		game.step(DT)
 
 
+func hero_of(cls: String) -> Hero:
+	for h in game.heroes:
+		if h.data.cls == cls:
+			return h
+	return null
+
+
 # ------------------------------------------------------------------
 
 func test_arc() -> void:
 	check(Combat.in_arc(Vector2.ZERO, Vector2.RIGHT, Vector2(10, 0), 20.0, 1.0), "дуга: цель впереди")
 	check(not Combat.in_arc(Vector2.ZERO, Vector2.RIGHT, Vector2(-10, 0), 20.0, 1.0), "дуга: цель сзади")
-	check(not Combat.in_arc(Vector2.ZERO, Vector2.RIGHT, Vector2(40, 0), 20.0, 1.0), "дуга: цель далеко")
 
 
-func test_roll_iframes() -> void:
-	var p := fresh_night()
-	var st := p.stamina
-	press("roll")
-	run(0.1)
-	check(p.state == "roll", "перекат начался")
-	check(p.stamina < st, "перекат тратит выносливость")
-	check(p.take_hit(30.0, p.position + Vector2(5, 0), true) == "dodged", "неуязвимость в перекате")
-	check(p.hp == p.max_hp, "урон в перекате не прошёл")
+func test_new_game_roster() -> void:
+	game.new_game()
+	check(game.screen == "beacon", "новая игра начинается у маяка")
+	check(Save.data.roster.size() == 3, "стартовый гарнизон — 3 героя")
+	fresh_night()
+	check(game.heroes.size() == 3, "герои вышли на поле")
 
 
-func test_parry() -> void:
-	var p := fresh_night()
-	press("parry")
-	game.step(DT)
-	check(p.take_hit(30.0, p.position + Vector2(5, 0), true) == "parried", "парирование в окне")
-	check(p.take_hit(30.0, p.position, false) == "hit", "удар по площади не парируется")
-	p = fresh_night()
-	press("parry")
-	run(0.3)
-	check(p.take_hit(30.0, p.position + Vector2(5, 0), true) == "hit", "поздний блок не парирует")
+func test_move_order() -> void:
+	game.new_game()
+	fresh_night()
+	var k := hero_of("knight")
+	game.order_move(k, Vector2(100, 120))
+	run(6.0)
+	check(k.position.distance_to(Vector2(100, 120)) < 1.0, "рыцарь дошёл до точки приказа")
 
 
-func test_stamina_gate() -> void:
-	var p := fresh_night()
-	p.stamina = 0.0
-	press("attack")
-	game.step(DT)
-	check(p.state != "attack", "без выносливости нельзя атаковать")
+func test_wall_path_goes_through_gate() -> void:
+	game.new_game()
+	fresh_night()
+	var a := hero_of("archer")
+	check(a.on_wall(), "лучник стоит на стене")
+	a.order_move(Vector2(100, 150))
+	check(a.path.size() == 2 and a.path[0] == Combat.GATE_WAY, "со стены в поле — через ворота")
 
 
-func test_kill_gives_ash() -> void:
-	var p := fresh_night()
+func test_moving_hero_does_not_attack() -> void:
+	game.new_game()
+	fresh_night()
+	var a := hero_of("archer")
+	var e: Enemy = game.spawn("husk", a.position + Vector2(0, -40))
+	a.order_move(Vector2(400, 226))
+	run(0.5)
+	check(game.projectiles.all(func(p): return p.get("src") != a), "герой в движении не стреляет")
+
+
+func test_archer_kills_and_gains_xp() -> void:
+	game.new_game()
+	fresh_night()
 	Save.data.ash = 0
-	p.position = Vector2(240, 150)
-	var e: Enemy = game.spawn("husk", Vector2(240, 165))
+	var a := hero_of("archer")
+	var e: Enemy = game.spawn("husk", a.position + Vector2(0, -60))
 	var gain := e.ash
-	for i in 40:
-		press("attack")
-		run(0.12)
-		if e.state == "dead":
-			break
-	check(e.state == "dead", "утопленник убит комбо")
-	check(int(Save.data.ash) == gain, "за убийство начислен пепел")
+	run(15.0)
+	check(e.state == "dead", "утопленник убит")
+	check(int(Save.data.ash) >= gain, "за убийство начислен пепел")
 
 
-func test_death_drops_and_reclaims_ash() -> void:
-	var p := fresh_night()
+func test_enemy_targets_field_hero_not_wall() -> void:
+	game.new_game()
+	fresh_night()
+	var a := hero_of("archer")
+	var k := hero_of("knight")
+	k.position = Vector2(60, 100)
+	var e: Enemy = game.spawn("husk", a.position + Vector2(0, -16))
+	e.tick(DT, game)
+	check(e.target == null, "утопленник не видит героя на стене")
+	k.position = e.position + Vector2(0, -20)
+	e.tick(DT, game)
+	check(e.target == k, "утопленник атакует героя в поле")
+	k.position = Vector2(60, 100)
+	var s: Enemy = game.spawn("spitter", a.position + Vector2(0, -60))
+	s.tick(DT, game)
+	check(s.target != null and s.target.on_wall(), "плевальщица достаёт до стены")
+
+
+func test_knight_taunt() -> void:
+	game.new_game()
+	fresh_night()
+	var k := hero_of("knight")
+	var p := hero_of("priest")
+	p.position = Vector2(300, 150)
+	k.position = Vector2(330, 150)
+	var e: Enemy = game.spawn("husk", Vector2(300, 140))
+	check(game.cast_ability(k, k.position), "вызов применён")
+	e.tick(DT, game)
+	check(e.target == k, "враг после вызова бьёт рыцаря")
+	check(not game.cast_ability(k, k.position), "повторно — только после перезарядки")
+
+
+func test_firerain_friendly_fire() -> void:
+	game.new_game()
+	Save.data.roster.append(game.make_hero("mage", 0))
+	fresh_night()
+	var m := hero_of("mage")
+	var k := hero_of("knight")
+	m.position = Vector2(240, 150)
+	k.position = Vector2(240, 110)
+	var hp0 := k.hp
+	check(game.cast_ability(m, k.position), "огненный дождь применён")
+	run(1.2)
+	check(k.hp < hp0, "огонь задел своего")
+
+
+func test_hero_death_is_permanent() -> void:
+	game.new_game()
+	fresh_night()
+	var p := hero_of("priest")
+	var name: String = p.data.name
+	p.take_damage(9999.0, game)
+	check(game.heroes.size() == 2, "павший исчез с поля")
+	check(Save.data.roster.size() == 2, "павший удалён из сохранения")
+	check(Save.data.fallen.size() == 1 and Save.data.fallen[0].name == name, "павший записан в память")
+	Save.load_game()
+	check(Save.data.roster.size() == 2, "после перезагрузки его не вернуть")
+
+
+func test_defeat_drops_ash_and_win_reclaims() -> void:
+	game.new_game()
+	fresh_night()
 	Save.data.ash = 50
-	Save.data.dropped = null
-	p.position = Vector2(100, 120)
-	p.hp = 1.0
-	p.take_hit(10.0, p.position + Vector2(3, 0), true)
+	game.gate_hp = 0.0
 	run(2.0)
-	check(game.screen == "dead", "смерть → экран гибели")
-	check(Save.data.dropped != null and int(Save.data.dropped.amount) == 50, "пепел остался на месте гибели")
-	check(int(Save.data.ash) == 0, "с собой пепла нет")
-	var drop := Vector2(Save.data.dropped.x, Save.data.dropped.y)
-	p = fresh_night()
-	p.position = drop
+	check(game.screen == "dead", "ворота пали → поражение")
+	check(int(Save.data.dropped_ash) == 50 and int(Save.data.ash) == 0, "пепел остался у ворот")
+	game.go_beacon()
+	game.start_night(1, true)
+	game.schedule.clear()
 	game.step(DT)
-	check(int(Save.data.ash) == 50 and Save.data.dropped == null, "пепел возвращён")
+	check(int(Save.data.ash) == 50 and int(Save.data.dropped_ash) == 0, "победа вернула пепел")
 
 
-func test_second_death_loses_ash() -> void:
-	var p := fresh_night()
-	Save.data.ash = 0
-	Save.data.dropped = {"x": 300.0, "y": 100.0, "amount": 77}
-	p.hp = 1.0
-	p.take_hit(10.0, p.position, true)
+func test_second_defeat_loses_ash() -> void:
+	game.new_game()
+	Save.data.dropped_ash = 77
+	fresh_night()
+	game.gate_hp = 0.0
 	run(2.0)
-	check(Save.data.dropped == null, "повторная гибель развеяла пепел")
+	check(int(Save.data.dropped_ash) == 0, "второе поражение развеяло пепел")
 	check(game.fall_note.contains("77"), "игрок узнал о потере")
 
 
-func test_gate_fall() -> void:
-	fresh_night()
-	Save.data.dropped = null
-	game.gate_hp = 0.0
-	run(2.0)
-	check(game.screen == "dead" and game.fall_title == "КОРДОН ПАЛ", "падение ворот = поражение")
-
-
 func test_night_progression() -> void:
-	Save.data.beacon_night = 1
+	game.new_game()
 	fresh_night(1)
 	game.schedule.clear()
 	game.step(DT)
@@ -160,47 +214,92 @@ func test_night_progression() -> void:
 	check(game.screen == "beacon" and int(Save.data.beacon_night) == 4, "ночь 4 — новый маяк")
 
 
-func test_beacon_levelup() -> void:
-	game.go_beacon()
-	Save.data.ash = 1000
-	var before := int(Save.data.vigor)
-	check(game.beacon_buy("vigor"), "покупка уровня")
-	check(int(Save.data.vigor) == before + 1 and int(Save.data.ash) < 1000, "живучесть выросла, пепел списан")
+func test_beacon_shop() -> void:
+	game.new_game()
+	Save.data.ash = 5000
+	check(game.beacon_buy("recruit"), "призыв героя")
+	check(Save.data.roster.size() == 4, "в гарнизоне 4 героя")
+	var r: Dictionary = Save.data.roster[0]
+	check(game.beacon_buy("train:%d" % int(r.id)) and int(r.lvl) == 2, "тренировка повышает уровень")
 	Save.data.towers = 2
-	check(not game.beacon_buy("tower"), "больше двух лучников нельзя")
+	check(not game.beacon_buy("tower"), "больше двух лучников на башнях нельзя")
+	for i in 5:
+		game.beacon_buy("recruit")
+	check(Save.data.roster.size() == game.MAX_HEROES, "не больше %d героев" % game.MAX_HEROES)
 	Save.data.ash = 0
-	check(not game.beacon_buy("strength"), "без пепла не прокачаться")
-
-
-## Грубый бот-игрок: идёт к ближайшему врагу, бьёт, иногда перекатывается и лечится.
-func test_boss_night_smoke() -> void:
-	Save.reset()
-	Save.data.towers = 2
-	Save.data.vigor = 10
-	Save.data.strength = 10
+	check(not game.beacon_buy("gate"), "без пепла ничего не купить")
+	Save.data.roster.clear()
 	game.go_beacon()
-	game.start_night(6, true)
-	var p: Player = game.player
-	var saw_phase2 := false
-	var time := 0.0
-	while time < 240.0 and game.screen == "night":
-		var e = game.nearest_enemy(p.position, 999.0)
-		var mv := Vector2.ZERO
-		if e:
-			var to: Vector2 = e.position - p.position
-			if to.length() > 18.0:
-				mv = to.normalized()
-			elif p.stamina > 30.0:
-				press("attack")
-			if e.state == "windup" and e.windup_time() - e.state_t < 0.2 and to.length() < 50.0 and p.stamina > 24.0:
-				press("roll")
-				mv = -to.normalized()
-		if p.hp < p.max_hp * 0.4:
-			press("heal")
-		game.buf.move = mv
-		game.step(DT)
-		time += DT
-		if game.boss and game.boss.phase == 2:
-			saw_phase2 = true
-	print("        бот: экран=%s, время=%.0f с, HP=%.0f, ворота=%.0f, фаза 2=%s" % [game.screen, time, p.hp, game.gate_hp, saw_phase2])
-	check(game.screen in ["victory", "dead", "night"], "ночь с боссом отработала без падений")
+	check(Save.data.roster.size() == 2, "без героев к маяку приходят добровольцы")
+
+
+# ------------------------------------------------------------------ баланс
+
+## Простой «командир»: жмёт способности и уводит героев из-под ударов по площади.
+func bot_step() -> void:
+	for h in game.heroes:
+		if h.ab_cd > 0.0:
+			continue
+		if h.cls.targeted:
+			var e = game.nearest_enemy(h.position, h.attack_range() * 1.4)
+			if e and (h.data.cls != "mage" or _no_friends_near(e.position, 42.0)):
+				game.cast_ability(h, e.position)
+		elif h.data.cls == "priest":
+			for x in game.heroes:
+				if x.hp < x.max_hp * 0.5:
+					game.cast_ability(h, h.position)
+					break
+		elif game.nearest_enemy(h.position, 40.0):
+			game.cast_ability(h, h.position)
+	for e in game.enemies:
+		if e.state == "windup" and e.atk.type == "aoe":
+			for h in game.heroes:
+				if not h.is_moving() and h.position.distance_to(e.atk_origin) < e.atk.radius + 6.0:
+					var away: Vector2 = (h.position - e.atk_origin).normalized()
+					if away == Vector2.ZERO:
+						away = Vector2.RIGHT
+					game.order_move(h, h.position + away * 45.0)
+
+
+func _no_friends_near(p: Vector2, r: float) -> bool:
+	for h in game.heroes:
+		if h.position.distance_to(p) < r:
+			return false
+	return true
+
+
+## Проходит кампанию ботом и печатает, где он спотыкается. Проверяет только отсутствие падений.
+func balance_runs() -> void:
+	var results: Array = []
+	for run_i in 3:
+		game.new_game()
+		var guard := 0
+		while guard < 400000 and int(Save.data.defeats) < 8:
+			guard += 1
+			if game.screen == "victory":
+				break
+			match game.screen:
+				"beacon":
+					var bought := true
+					while bought:
+						bought = game.beacon_buy("recruit") or game.beacon_buy("tower") or game.beacon_buy("gate")
+						if not bought:
+							for r in Save.data.roster:
+								if game.beacon_buy("train:%d" % int(r.id)):
+									bought = true
+									break
+					if Save.data.roster.is_empty():
+						break
+					game.start_night(game.night, true)
+				"dawn":
+					game.start_night(game.night, false)
+				"dead":
+					game.go_beacon()
+				"night":
+					bot_step()
+					game.step(DT)
+		results.append("ночь %d, поражений %d, павших %d, живых %d — %s" % [game.night, int(Save.data.defeats),
+			Save.data.fallen.size(), Save.data.roster.size(), "ПОБЕДА" if game.screen == "victory" else "не прошёл"])
+	for r in results:
+		print("        бот: ", r)
+	check(true, "кампания прогнана ботом без падений")

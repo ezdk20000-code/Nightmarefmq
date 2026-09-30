@@ -11,18 +11,19 @@ func _ready() -> void:
 
 func defaults() -> Dictionary:
 	return {
-		"version": 1,
+		"version": 2,
 		"started": false,
 		"completed": false,
 		"beacon_night": 1,
 		"ash": 0,
-		"vigor": 0,
-		"endurance": 0,
-		"strength": 0,
+		"dropped_ash": 0,
+		"roster": [],
+		"fallen": [],
+		"next_id": 1,
+		"recruits": 0,
 		"towers": 0,
-		"flasks_extra": 0,
-		"dropped": null,
-		"deaths": 0,
+		"gate_level": 0,
+		"defeats": 0,
 	}
 
 
@@ -34,7 +35,7 @@ func load_game() -> void:
 	if f == null:
 		return
 	var parsed = JSON.parse_string(f.get_as_text())
-	if parsed is Dictionary:
+	if parsed is Dictionary and int(parsed.get("version", 0)) == int(data.version):
 		for k in parsed:
 			data[k] = parsed[k]
 
