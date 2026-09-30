@@ -1,0 +1,830 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Тиран Пограничья</title>
+<style>
+:root{--bg:#14121c;--panel:#1f1b2b;--edge:#3a3350;--text:#e8e3d6;--muted:#9a93ad;--gold:#ffc93c;--red:#ff5d5d;--green:#7ee081}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:"Courier New",monospace}
+body{display:flex;flex-direction:column;align-items:center;padding:8px 8px 24px;gap:8px;min-height:100vh}
+h1{font-size:18px;margin:4px 0;letter-spacing:2px;color:var(--gold);text-shadow:2px 2px 0 #000}
+#hud{display:flex;flex-wrap:wrap;gap:4px 14px;justify-content:center;font-size:14px;font-weight:bold}
+#wrap{position:relative;width:min(100%,960px)}
+canvas{display:block;width:100%;image-rendering:pixelated;image-rendering:crisp-edges;border:3px solid var(--edge);background:#000;touch-action:manipulation;cursor:pointer}
+#controls{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;width:min(100%,960px)}
+button{font-family:inherit;font-size:13px;font-weight:bold;color:var(--text);background:var(--panel);border:2px solid var(--edge);border-bottom-width:4px;padding:8px 10px;cursor:pointer;border-radius:0}
+button:hover:not(:disabled){border-color:var(--gold)}
+button:disabled{opacity:.4;cursor:default}
+button.active{border-color:var(--gold);color:var(--gold)}
+button.primary{background:#5b2330;border-color:#a8364d}
+#bottom{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:min(100%,960px)}
+@media (max-width:640px){#bottom{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:2px solid var(--edge);padding:8px;font-size:13px;min-height:80px}
+.panel h3{margin:0 0 6px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
+#roster{display:flex;flex-wrap:wrap;gap:4px}
+#roster button{font-size:12px;padding:4px 6px;border-bottom-width:2px}
+#info{margin-top:8px;line-height:1.5}
+#btnBench,#btnTrain{margin-top:4px;font-size:12px;padding:4px 8px}
+#log{max-height:150px;overflow:auto;font-size:12px;line-height:1.45}
+#log div{border-bottom:1px dashed #2c2640;padding:2px 0}
+#modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.7);z-index:10;padding:16px}
+#modal.show{display:flex}
+#modal .box{background:var(--panel);border:3px solid var(--gold);padding:16px;width:440px;max-width:100%;max-height:100%;overflow:auto}
+#modal h2{margin:0 0 8px;color:var(--gold);font-size:18px;text-align:center}
+#mText{font-size:13px;line-height:1.5}
+#modal .choices{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+#modal .choices button{text-align:left;font-weight:normal;line-height:1.4}
+#modal .choices b{color:var(--gold)}
+#toast{position:absolute;left:50%;top:8px;transform:translateX(-50%);font-weight:bold;font-size:14px;padding:6px 10px;background:rgba(0,0,0,.8);border:2px solid var(--gold);pointer-events:none;opacity:0;transition:opacity .3s;white-space:nowrap;max-width:95%;overflow:hidden;text-overflow:ellipsis}
+.help{font-size:12px;color:var(--muted);max-width:960px;text-align:center;line-height:1.5}
+</style>
+</head>
+<body>
+<h1>ТИРАН ПОГРАНИЧЬЯ</h1>
+<div id="hud"></div>
+<div id="wrap"><canvas id="game"></canvas><div id="toast"></div></div>
+<div id="controls">
+  <button id="btnRecruit">Нанять героя</button>
+  <button id="btnBarricade">Баррикада (15)</button>
+  <button id="btnWall">Укрепить стены (40)</button>
+  <button id="btnNight" class="primary">▶ Начать ночь</button>
+  <button id="btnSpeed">Скорость x1</button>
+</div>
+<div id="bottom">
+  <div class="panel">
+    <h3>Герои</h3>
+    <div id="roster"></div>
+    <div id="info"><div id="infoText"></div><button id="btnTrain">Тренировать</button> <button id="btnBench">В казарму</button></div>
+  </div>
+  <div class="panel"><h3>Летопись</h3><div id="log"></div></div>
+</div>
+<div class="help">Выбери героя в списке и нажми на свободную клетку травы, чтобы поставить его на позицию. Баррикады ставятся только на дорогу.<br>Днём героев можно переставлять. Ночью из Озера Чудовищ выходят монстры. Продержись 10 ночей.</div>
+
+<div id="modal"><div class="box"><h2 id="mTitle"></h2><div id="mText"></div><div class="choices" id="mChoices"></div></div></div>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const TILE = 16, COLS = 20, ROWS = 11, W = COLS * TILE, H = ROWS * TILE;
+const MAX_HEROES = 12, BARRICADE_COST = 15, WALL_COST = 40;
+const cv = $('game'); cv.width = W; cv.height = H;
+const ctx = cv.getContext('2d'); ctx.imageSmoothingEnabled = false;
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const randi = (a, b) => Math.floor(rand(a, b + 1));
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// ---------------------------------------------------------------- спрайты
+const PAL = {
+  k:'#1a1c2c', s:'#f4c29a', a:'#b8c4d6', A:'#6d7a91', c:'#b13e53', g:'#38b764', G:'#1e6b44',
+  b:'#8a5a2b', w:'#e8e8e8', p:'#5d275d', P:'#b55088', o:'#ef7d57', y:'#ffcd75', e:'#e43b44',
+  n:'#8b9bb4', N:'#566c86', d:'#73464c', f:'#1e5a32', F:'#3f8a52', t:'#5a3a22', m:'#94b0c2', M:'#c2d3e0'
+};
+const SPR = {
+  knight:[
+    "..kkkkk..",
+    ".kaaaaak.",
+    ".kaAkAak.",
+    ".kaaaaak.",
+    "..kcaak.w",
+    ".kaaaaakw",
+    "kcaaaaakw",
+    "kcaAAaakk",
+    ".kaaaaak.",
+    ".kak.kak.",
+    ".kk...kk."],
+  archer:[
+    "...kkk.b.",
+    "..kgggkbw",
+    ".kgsssgkw",
+    ".kgkskgkw",
+    "..kssskbw",
+    ".kGggggkb",
+    "kGgggggkb",
+    "kGgGGgk..",
+    ".kgggggk.",
+    ".kbk.kbk.",
+    ".kk...kk."],
+  mage:[
+    "....k...o",
+    "...kPk.oy",
+    "..kPPPk.b",
+    ".kPPPPPkb",
+    "kkkkkkkkb",
+    ".kssssk.b",
+    ".kskskk.b",
+    "..kssk..b",
+    ".kpppppkb",
+    "kpppppppk",
+    ".kkkkkkk."],
+  goblin:[
+    "k.....k",
+    "gkgggkg",
+    ".gegeg.",
+    ".ggggg.",
+    ".gkkkg.",
+    ".bgggb.",
+    ".k...k."],
+  wolf:[
+    ".......kk.",
+    "k.....knnk",
+    "knnnnnnnek",
+    ".nnnnnnnnk",
+    ".nNnnnNn..",
+    ".k.k..k.k."],
+  orc:[
+    "..kkkkkk..",
+    ".kGGGGGGk.",
+    ".kGeGGeGk.",
+    ".kGGGGGGk.",
+    ".kGwGGwGk.",
+    "kdkGGGGkdk",
+    "kddddddddk",
+    "kGddddddGk",
+    ".kdd..ddk.",
+    ".kk....kk."],
+  barricade:[
+    ".k...k...k..",
+    "kbk.kbk.kbk.",
+    "kbk.kbk.kbk.",
+    "kkkkkkkkkkkk",
+    "kbbbbbbbbbbk",
+    "kkkkkkkkkkkk",
+    ".kbk.kbk.kbk",
+    ".kbk.kbk.kbk",
+    ".kkk.kkk.kkk"],
+  tree:[
+    "...kkkkk...",
+    "..kfFFffk..",
+    ".kfFfffffk.",
+    "kfFfffffffk",
+    "kffffffFffk",
+    "kfffffFfffk",
+    ".kfffffffk.",
+    "..kkfffkk..",
+    "....ktk....",
+    "....ktk....",
+    "...kkkkk..."],
+  rock:[
+    "..kkkk..",
+    ".kmmMmk.",
+    "kmMmmmmk",
+    "kmmmmmmk",
+    ".kkkkkk."]
+};
+const sprCache = new Map();
+function getSprite(name, pal, white) {
+  const key = name + '|' + (pal ? JSON.stringify(pal) : '') + (white ? '|w' : '');
+  let c = sprCache.get(key);
+  if (c) return c;
+  const rows = SPR[name];
+  c = document.createElement('canvas');
+  c.width = rows[0].length; c.height = rows.length;
+  const g = c.getContext('2d');
+  for (let y = 0; y < rows.length; y++) for (let x = 0; x < rows[y].length; x++) {
+    const ch = rows[y][x];
+    if (ch === '.') continue;
+    g.fillStyle = white ? '#ffffff' : (pal && pal[ch]) || PAL[ch] || '#ff00ff';
+    g.fillRect(x, y, 1, 1);
+  }
+  sprCache.set(key, c);
+  return c;
+}
+// x,y — точка «под ногами» спрайта
+function drawSprite(g, name, x, y, o = {}) {
+  const c = getSprite(name, o.pal, o.white);
+  const sc = o.scale || 1, w = c.width * sc, h = c.height * sc;
+  const dx = Math.round(x - w / 2), dy = Math.round(y - h);
+  if (o.flip) { g.save(); g.translate(dx + w, dy); g.scale(-1, 1); g.drawImage(c, 0, 0, w, h); g.restore(); }
+  else g.drawImage(c, dx, dy, w, h);
+}
+
+// ---------------------------------------------------------------- карта
+// 0 трава, 1 дорога, 2 озеро, 3 крепость, 4 декор
+const grid = Array.from({ length: ROWS }, () => Array(COLS).fill(0));
+for (let r = 0; r < ROWS; r++) grid[r][0] = 3;
+for (let r = 0; r <= 4; r++) for (let c = 17; c < COLS; c++) grid[r][c] = 2;
+const GATE = { col: 0, row: 6 };
+
+const WAY = [[20, 2], [14, 2], [14, 8], [9, 8], [9, 3], [4, 3], [4, 6], [0, 6]];
+const PTS = WAY.map(([c, r]) => ({ x: c * TILE + 8, y: r * TILE + 8, c, r }));
+const SEG = []; let PATH_LEN = 0;
+const pathDist = {};
+for (let i = 0; i < PTS.length - 1; i++) {
+  const a = PTS[i], b = PTS[i + 1];
+  const len = Math.hypot(b.x - a.x, b.y - a.y);
+  SEG.push({ a, b, len, start: PATH_LEN });
+  const steps = Math.max(Math.abs(b.c - a.c), Math.abs(b.r - a.r));
+  const sc = Math.sign(b.c - a.c), sr = Math.sign(b.r - a.r);
+  for (let k = 0; k < steps; k++) {
+    const c = a.c + sc * k, r = a.r + sr * k;
+    if (c >= 0 && c < COLS && r >= 0 && r < ROWS) {
+      pathDist[c + ',' + r] = PATH_LEN + k * TILE;
+      if (grid[r][c] === 0) grid[r][c] = 1;
+    }
+  }
+  PATH_LEN += len;
+}
+function posAt(d) {
+  for (const s of SEG) {
+    if (d <= s.start + s.len) {
+      const t = (d - s.start) / s.len;
+      return { x: s.a.x + (s.b.x - s.a.x) * t, y: s.a.y + (s.b.y - s.a.y) * t, dx: Math.sign(s.b.x - s.a.x) };
+    }
+  }
+  const e = PTS[PTS.length - 1];
+  return { x: e.x, y: e.y, dx: -1 };
+}
+
+let seed = 1337;
+const srand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const nearPath = (c, r) => {
+  for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+    const rr = r + dr, cc = c + dc;
+    if (rr >= 0 && rr < ROWS && cc >= 0 && cc < COLS && grid[rr][cc] === 1) return true;
+  }
+  return false;
+};
+const deco = {};
+for (let tries = 0, placed = 0; tries < 300 && placed < 11; tries++) {
+  const c = 1 + Math.floor(srand() * (COLS - 1)), r = Math.floor(srand() * ROWS);
+  if (grid[r][c] !== 0 || nearPath(c, r)) continue;
+  grid[r][c] = 4; deco[c + ',' + r] = srand() < 0.7 ? 'tree' : 'rock'; placed++;
+}
+
+const bg = document.createElement('canvas'); bg.width = W; bg.height = H;
+(function paintBackground() {
+  const b = bg.getContext('2d');
+  const speck = (x, y, cols, n) => { for (let i = 0; i < n; i++) { b.fillStyle = cols[Math.floor(srand() * cols.length)]; b.fillRect(x + Math.floor(srand() * TILE), y + Math.floor(srand() * TILE), 1, 1); } };
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const x = c * TILE, y = r * TILE, t = grid[r][c];
+    if (t === 0 || t === 4) { b.fillStyle = '#2e6b3f'; b.fillRect(x, y, TILE, TILE); speck(x, y, ['#3f8a52', '#25573a', '#357a47'], 14); }
+    else if (t === 1) { b.fillStyle = '#8a6b47'; b.fillRect(x, y, TILE, TILE); speck(x, y, ['#9e7d55', '#6f5438', '#a88a5e'], 12); }
+    else if (t === 2) {
+      b.fillStyle = '#29366f'; b.fillRect(x, y, TILE, TILE); speck(x, y, ['#3b5dc9', '#223063'], 8);
+      b.fillStyle = '#c2a36b';
+      if (c > 0 && grid[r][c - 1] !== 2) b.fillRect(x, y, 2, TILE);
+      if (r < ROWS - 1 && grid[r + 1][c] !== 2) b.fillRect(x, y + TILE - 2, TILE, 2);
+    } else if (t === 3) {
+      b.fillStyle = '#566c86'; b.fillRect(x, y, TILE, TILE);
+      b.fillStyle = '#333c57';
+      for (let yy = 0; yy < TILE; yy += 4) {
+        b.fillRect(x, y + yy, TILE, 1);
+        for (let xx = (yy / 4) % 2 ? 2 : 6; xx < TILE; xx += 8) b.fillRect(x + xx, y + yy, 1, 4);
+      }
+      b.fillStyle = '#94b0c2'; b.fillRect(x + TILE - 3, y, 3, TILE);
+      b.fillStyle = '#333c57'; for (let yy = 1; yy < TILE; yy += 4) b.fillRect(x + TILE - 3, y + yy, 3, 2);
+    }
+  }
+  // ворота
+  const gx = GATE.col * TILE, gy = GATE.row * TILE;
+  b.fillStyle = '#1a1c2c'; b.fillRect(gx + 2, gy + 1, 12, 15);
+  b.fillStyle = '#5a3a22'; b.fillRect(gx + 3, gy + 3, 10, 13);
+  b.fillStyle = '#3d2716'; for (let xx = 5; xx < 13; xx += 3) b.fillRect(gx + xx, gy + 3, 1, 13);
+  b.fillStyle = '#8b9bb4'; b.fillRect(gx + 3, gy + 7, 10, 1); b.fillRect(gx + 3, gy + 12, 10, 1);
+  for (const key in deco) {
+    const [c, r] = key.split(',').map(Number);
+    drawSprite(b, deco[key], c * TILE + 8, r * TILE + (deco[key] === 'tree' ? 14 : 12));
+  }
+})();
+
+// ---------------------------------------------------------------- данные игры
+const CLASSES = {
+  knight: { name: 'Рыцарь', dmg: 7, range: 1.5, rate: 0.9 },
+  archer: { name: 'Лучник', dmg: 3, range: 3.6, rate: 0.55 },
+  mage:   { name: 'Маг',    dmg: 5, range: 2.8, rate: 1.5, splash: 14 }
+};
+const RAR = [
+  { id: 'N',   mult: 1,   color: '#9aa0a6', w: 60 },
+  { id: 'R',   mult: 1.4, color: '#4fa3ff', w: 28 },
+  { id: 'SR',  mult: 2,   color: '#c77dff', w: 10 },
+  { id: 'SSR', mult: 3.2, color: '#ffc93c', w: 2 }
+];
+const NAMES = ['Альрик', 'Бренна', 'Кассиан', 'Дара', 'Эйвин', 'Фрея', 'Гаррет', 'Хельга', 'Ивар', 'Йорн', 'Кира', 'Лиан',
+  'Мирра', 'Норд', 'Ольга', 'Рейн', 'Сигрид', 'Торин', 'Ульф', 'Вера', 'Зоран', 'Ярослава'];
+const MON = {
+  goblin: { name: 'Гоблин', sprite: 'goblin', hp: 12, speed: 20, gold: 2, dmg: 1, colors: ['#38b764', '#1a1c2c', '#e43b44'] },
+  wolf:   { name: 'Волк', sprite: 'wolf', hp: 8, speed: 38, gold: 2, dmg: 1, colors: ['#8b9bb4', '#566c86'] },
+  orc:    { name: 'Орк', sprite: 'orc', hp: 45, speed: 12, gold: 6, dmg: 3, colors: ['#1e6b44', '#73464c'] },
+  boss:   { name: 'Владыка Озера', sprite: 'orc', hp: 250, speed: 8, gold: 80, dmg: 15, scale: 2,
+            pal: { G: '#7a3b8f', d: '#29366f', w: '#ffcd75', e: '#ff0044' }, colors: ['#7a3b8f', '#29366f', '#ff0044'] }
+};
+
+const S = {
+  phase: 'day', night: 1, gold: 60, gateHp: 30, gateMax: 30, morale: 60,
+  heroes: [], monsters: [], projectiles: [], particles: [], floaters: [], barricades: [],
+  spawnQueue: [], spawnTimer: 0, speed: 1, selected: null, mode: null, recruits: 0, kills: 0,
+  t: 0, darkness: 0, shake: 0, paused: true, won: false, nextId: 1
+};
+let best = 0;
+try { best = +localStorage.getItem('tyrant_best') || 0; } catch (e) {}
+
+const moraleMult = () => 0.75 + S.morale / 200;
+const addMorale = v => { S.morale = clamp(S.morale + v, 0, 100); };
+const recruitCost = () => 30 + 5 * S.recruits;
+const trainCost = h => 15 * h.lvl;
+const heroDmg = h => CLASSES[h.cls].dmg * RAR[h.r].mult * (1 + 0.2 * (h.lvl - 1));
+const heroRate = h => CLASSES[h.cls].rate / moraleMult();
+const heroPos = h => ({ x: h.col * TILE + 8, y: h.row * TILE + 8 });
+const heroAt = (c, r) => S.heroes.find(h => h.col === c && h.row === r);
+const buildable = (c, r) => c >= 0 && c < COLS && r >= 0 && r < ROWS && grid[r][c] === 0 && !heroAt(c, r);
+const heroLabel = h => `<span style="color:${RAR[h.r].color}">[${RAR[h.r].id}]</span> ${h.name}`;
+
+// ---------------------------------------------------------------- интерфейс
+function toast(text, color = '#ffc93c') {
+  const el = $('toast');
+  el.textContent = text; el.style.color = color; el.style.borderColor = color; el.style.opacity = 1;
+  clearTimeout(toast.tm); toast.tm = setTimeout(() => el.style.opacity = 0, 2000);
+}
+function log(html, color) {
+  const d = document.createElement('div');
+  d.innerHTML = html; if (color) d.style.color = color;
+  const el = $('log'); el.prepend(d);
+  while (el.children.length > 60) el.lastChild.remove();
+}
+function modal(title, html, choices) {
+  $('mTitle').textContent = title; $('mText').innerHTML = html;
+  const box = $('mChoices'); box.innerHTML = '';
+  for (const c of choices) {
+    const b = document.createElement('button');
+    b.innerHTML = c.label; b.disabled = !!c.disabled;
+    b.onclick = () => { closeModal(); if (c.fn) c.fn(); renderRoster(); hud(); };
+    box.appendChild(b);
+  }
+  $('modal').classList.add('show'); S.paused = true;
+}
+function closeModal() { $('modal').classList.remove('show'); S.paused = false; }
+
+function hud() {
+  const moraleCol = S.morale >= 70 ? 'var(--green)' : S.morale < 25 ? 'var(--red)' : 'var(--text)';
+  let h = `<span>🌙 Ночь ${S.night}${S.phase === 'day' ? ' · день' : ''}</span>` +
+    `<span style="color:var(--red)">🏰 Стены ${Math.max(0, S.gateHp)}/${S.gateMax}</span>` +
+    `<span style="color:var(--gold)">💰 ${S.gold}</span>` +
+    `<span style="color:${moraleCol}">⚑ Мораль ${S.morale}</span>`;
+  if (S.phase === 'night') h += `<span>👹 Осталось ${S.spawnQueue.length + S.monsters.length}</span>`;
+  $('hud').innerHTML = h;
+  const day = S.phase === 'day';
+  $('btnRecruit').textContent = `Нанять героя (${recruitCost()})`;
+  $('btnRecruit').disabled = S.gold < recruitCost() || S.heroes.length >= MAX_HEROES || S.phase === 'over';
+  $('btnBarricade').disabled = !day || S.gold < BARRICADE_COST;
+  $('btnBarricade').classList.toggle('active', S.mode === 'barricade');
+  $('btnWall').disabled = !day || S.gold < WALL_COST;
+  $('btnNight').disabled = !day;
+  $('btnNight').textContent = day ? '▶ Начать ночь' : S.phase === 'night' ? 'Идёт бой…' : 'Конец';
+  $('btnSpeed').textContent = `Скорость x${S.speed}`;
+  const h0 = S.selected;
+  if (h0) {
+    const cl = CLASSES[h0.cls];
+    $('infoText').innerHTML = `${heroLabel(h0)} — ${cl.name}, ур. ${h0.lvl}${h0.lvl < 10 ? ` (опыт ${h0.xp}/${h0.lvl * 8})` : ' (макс.)'}<br>` +
+      `Урон ${heroDmg(h0).toFixed(1)} · атака раз в ${heroRate(h0).toFixed(2)} с · дальность ${cl.range} · убийств ${h0.kills}` +
+      (h0.col < 0 ? '<br><span style="color:var(--muted)">В казарме. Нажми на клетку травы, чтобы поставить.</span>' : '');
+    $('btnBench').style.display = day && h0.col >= 0 ? '' : 'none';
+    $('btnTrain').style.display = day && h0.lvl < 10 ? '' : 'none';
+    $('btnTrain').textContent = `Тренировать до ур. ${h0.lvl + 1} (${trainCost(h0)})`;
+    $('btnTrain').disabled = S.gold < trainCost(h0);
+  } else {
+    $('infoText').innerHTML = S.heroes.length ? '<span style="color:var(--muted)">Выбери героя.</span>' : '<span style="color:var(--muted)">Героев нет. Найми кого-нибудь.</span>';
+    $('btnBench').style.display = 'none';
+    $('btnTrain').style.display = 'none';
+  }
+}
+function renderRoster() {
+  const el = $('roster'); el.innerHTML = '';
+  for (const h of S.heroes) {
+    const b = document.createElement('button');
+    b.innerHTML = `${h.col < 0 ? '⛺ ' : ''}${heroLabel(h)} · ${CLASSES[h.cls].name} ${h.lvl}`;
+    if (S.selected === h) b.classList.add('active');
+    b.onclick = () => { S.selected = S.selected === h ? null : h; S.mode = null; renderRoster(); hud(); };
+    el.appendChild(b);
+  }
+  hud();
+}
+
+// ---------------------------------------------------------------- механики
+function recruit(opt = {}) {
+  if (S.heroes.length >= MAX_HEROES) return null;
+  let r = opt.rarity;
+  if (r === undefined) {
+    let roll = Math.random() * 100; r = 0;
+    for (let i = 0; i < RAR.length; i++) { if (roll < RAR[i].w) { r = i; break; } roll -= RAR[i].w; }
+  }
+  const used = new Set(S.heroes.map(h => h.name));
+  const free = NAMES.filter(n => !used.has(n));
+  const h = { id: S.nextId++, name: free.length ? pick(free) : pick(NAMES) + ' II', cls: opt.cls || pick(Object.keys(CLASSES)),
+    r, lvl: 1, xp: 0, kills: 0, col: -1, row: -1, cd: 0, anim: 0, face: 1 };
+  S.heroes.push(h);
+  const txt = `${RAR[r].id} · ${h.name} — ${CLASSES[h.cls].name}`;
+  if (!opt.silent) toast((r === 3 ? '✨ ЛЕГЕНДА! ' : 'Нанят: ') + txt, RAR[r].color);
+  log(`Нанят ${heroLabel(h)} — ${CLASSES[h.cls].name}.${r === 3 ? ' <b style="color:#ffc93c">Легендарный герой!</b>' : ''}`);
+  S.selected = h;
+  renderRoster();
+  return h;
+}
+function giveXp(h, x) {
+  h.xp += x;
+  let up = false;
+  while (h.lvl < 10 && h.xp >= h.lvl * 8) { h.xp -= h.lvl * 8; h.lvl++; up = true; }
+  if (h.lvl >= 10) h.xp = 0;
+  if (up) {
+    if (h.col >= 0) { const p = heroPos(h); floater(p.x, p.y - 12, 'УР ' + h.lvl, '#7ee081'); }
+    log(`${heroLabel(h)} достиг уровня ${h.lvl}.`, '#7ee081');
+    renderRoster();
+  }
+}
+function floater(x, y, text, color) { S.floaters.push({ x, y, text: String(text), color, life: 0.8 }); }
+function burst(x, y, colors, n, spd = 40) {
+  for (let i = 0; i < n; i++) {
+    const a = rand(0, Math.PI * 2), v = rand(spd * 0.3, spd);
+    S.particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 20, g: 90, life: rand(0.3, 0.7), color: pick(colors) });
+  }
+}
+function damage(m, amt, owner) {
+  if (m.dead) return;
+  amt = Math.max(1, Math.round(amt));
+  m.hp -= amt; m.flash = 0.08;
+  floater(m.x + rand(-3, 3), m.y - 8, amt, '#ffffff');
+  if (m.hp <= 0) {
+    m.dead = true;
+    const def = MON[m.type];
+    const g = Math.round(def.gold * (1 + 0.05 * (S.night - 1)));
+    S.gold += g; S.kills++;
+    if (owner) { owner.kills++; giveXp(owner, def.gold); }
+    floater(m.x, m.y - 16, '+' + g, '#ffc93c');
+    burst(m.x, m.y, def.colors, m.type === 'boss' ? 40 : 10, m.type === 'boss' ? 80 : 40);
+    if (m.type === 'boss') {
+      addMorale(15);
+      toast('Владыка Озера повержен!', '#ffc93c');
+      log(`<b>Владыка Озера повержен</b>${owner ? ' рукой ' + heroLabel(owner) : ''}! Мораль +15.`, '#ffc93c');
+    }
+  }
+}
+
+function startNight() {
+  if (S.phase !== 'day') return;
+  if (!S.heroes.some(h => h.col >= 0)) toast('Ни один герой не стоит на позиции!', '#ff5d5d');
+  S.phase = 'night'; S.mode = null;
+  S.spawnQueue = buildWave(S.night); S.spawnTimer = 1.5;
+  log(`<b>Ночь ${S.night}.</b> Из озера поднимаются чудовища: ${S.spawnQueue.length}.${S.spawnQueue.includes('boss') ? ' <b style="color:#ff5d5d">Среди них Владыка Озера!</b>' : ''}`, '#c77dff');
+  hud();
+}
+function buildWave(n) {
+  const q = [];
+  const count = 4 + n * 4;
+  for (let i = 0; i < count; i++) {
+    const r = Math.random(); let t = 'goblin';
+    if (n >= 2 && r < 0.3) t = 'wolf';
+    else if (n >= 3 && r > 0.82) t = 'orc';
+    q.push(t);
+  }
+  if (n >= 5) for (let i = 0; i < (n - 4) * 2; i++) q.splice(randi(0, q.length), 0, 'orc');
+  if (n % 5 === 0) for (let i = 0; i < n / 5; i++) q.push('boss');
+  return q;
+}
+function spawn(type) {
+  const def = MON[type];
+  const hp = Math.round(def.hp * (1 + 0.45 * (S.night - 1) + 0.03 * (S.night - 1) ** 2));
+  const p = posAt(0);
+  S.monsters.push({ type, hp, maxHp: hp, dist: 0, x: p.x, y: p.y, face: -1, flash: 0, atkCd: 0, seed: rand(0, 10), dead: false });
+  burst(W - 20, 2 * TILE + 8, ['#3b5dc9', '#41a6f6', '#29366f'], 6, 30);
+}
+function dawn() {
+  S.phase = 'day';
+  S.barricades = S.barricades.filter(b => b.hp > 0);
+  let income = 20 + S.night * 4;
+  if (S.morale >= 70) income += 10;
+  S.gold += income;
+  log(`Рассвет. Ночь ${S.night} пережита. Налоги: +${income} золота.`, '#ffc93c');
+  S.night++;
+  const survived = S.night - 1;
+  if (survived > best) { best = survived; try { localStorage.setItem('tyrant_best', best); } catch (e) {} }
+  if (S.morale < 20 && S.heroes.length && Math.random() < 0.5) {
+    const h = pick(S.heroes);
+    S.heroes.splice(S.heroes.indexOf(h), 1);
+    if (S.selected === h) S.selected = null;
+    log(`<b>Дезертирство!</b> ${heroLabel(h)} сбежал из крепости: мораль слишком низкая.`, '#ff5d5d');
+    toast(`${h.name} дезертировал!`, '#ff5d5d');
+  }
+  renderRoster();
+  if (survived >= 10 && !S.won) {
+    S.won = true;
+    modal('ПОБЕДА', `Кордон выстоял 10 ночей. Хроники назовут тебя ${S.morale >= 50 ? '<b>Спасителем Пограничья</b>' : '<b>Тираном Пограничья</b>'}.<br><br>Убито чудовищ: ${S.kills}.`, [
+      { label: '<b>Бесконечная оборона</b><br>Озеро не иссякнет. Сколько ещё ночей продержишься?', fn: showDecree },
+      { label: 'Начать заново', fn: () => location.reload() }
+    ]);
+  } else showDecree();
+}
+
+const DECREES = [
+  { t: 'Военный налог', d: '+45 золота, −15 морали', ok: () => true, fx: () => { S.gold += 45; addMorale(-15); } },
+  { t: 'Пир для гарнизона', d: '−25 золота, +20 морали', ok: () => S.gold >= 25, fx: () => { S.gold -= 25; addMorale(20); } },
+  { t: 'Принудительные работы', d: 'Стены: +5 к максимуму и ремонт на 10, −10 морали', ok: () => true, fx: () => { S.gateMax += 5; S.gateHp = Math.min(S.gateMax, S.gateHp + 10); addMorale(-10); } },
+  { t: 'Открыть ворота беженцам', d: 'Бесплатный новобранец, −10 морали (лишние рты)', ok: () => S.heroes.length < MAX_HEROES, fx: () => { recruit({ silent: false }); addMorale(-10); } },
+  { t: 'Муштра', d: 'Все герои получают 6 опыта, −5 морали', ok: () => S.heroes.length > 0, fx: () => { S.heroes.forEach(h => giveXp(h, 6)); addMorale(-5); } },
+  { t: 'Молебен в храме', d: '−10 золота, +10 морали', ok: () => S.gold >= 10, fx: () => { S.gold -= 10; addMorale(10); } },
+  { t: 'Конфискация у купцов', d: '+80 золота, −30 морали', ok: () => true, fx: () => { S.gold += 80; addMorale(-30); } },
+  { t: 'Раздать зерно из казны', d: '−40 золота, +30 морали', ok: () => S.gold >= 40, fx: () => { S.gold -= 40; addMorale(30); } }
+];
+function showDecree() {
+  const pool = DECREES.slice().sort(() => Math.random() - 0.5).slice(0, 2);
+  modal(`Утро. Указ на ночь ${S.night}`, `Советники ждут твоего решения, государь.<br>Мораль сейчас <b>${S.morale}</b>: от неё зависит скорость атаки героев. Если она упадёт ниже 20, герои начнут дезертировать.`, [
+    ...pool.map(d => ({ label: `<b>${d.t}</b><br>${d.d}`, disabled: !d.ok(), fn: () => { d.fx(); log(`Указ: «${d.t}».`, '#9a93ad'); } })),
+    { label: 'Не издавать указов', fn: () => {} }
+  ]);
+}
+function gameOver() {
+  S.phase = 'over';
+  const survived = S.night - 1;
+  hud();
+  setTimeout(() => modal('КОРДОН ПАЛ', `Чудовища прорвали ворота на ночь ${S.night}.<br>Пережито ночей: <b>${survived}</b> · рекорд: <b>${best}</b><br>Убито чудовищ: ${S.kills}.`, [
+    { label: '<b>Начать заново</b>', fn: () => location.reload() }
+  ]), 700);
+}
+
+// ---------------------------------------------------------------- ввод
+cv.addEventListener('pointerdown', e => {
+  if (S.paused || S.phase === 'over') return;
+  const r = cv.getBoundingClientRect();
+  const x = (e.clientX - r.left) / r.width * W, y = (e.clientY - r.top) / r.height * H;
+  onTap(Math.floor(x / TILE), Math.floor(y / TILE));
+});
+function onTap(c, r) {
+  if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return;
+  const day = S.phase === 'day';
+  if (S.mode === 'barricade') {
+    if (grid[r][c] !== 1) { toast('Баррикады ставятся только на дорогу', '#ff5d5d'); return; }
+    if (S.barricades.some(b => b.col === c && b.row === r)) { toast('Здесь уже стоит баррикада', '#ff5d5d'); return; }
+    S.gold -= BARRICADE_COST;
+    S.barricades.push({ col: c, row: r, x: c * TILE + 8, y: r * TILE + 8, dist: pathDist[c + ',' + r], hp: 40, maxHp: 40 });
+    burst(c * TILE + 8, r * TILE + 10, ['#8a5a2b', '#5a3a22'], 8, 30);
+    if (S.gold < BARRICADE_COST) S.mode = null;
+    hud(); return;
+  }
+  const h = heroAt(c, r);
+  if (h) { S.selected = S.selected === h ? null : h; renderRoster(); return; }
+  const sel = S.selected;
+  if (sel && buildable(c, r)) {
+    if (!day && sel.col >= 0) { toast('Ночью герои не покидают позиций', '#ff5d5d'); return; }
+    sel.col = c; sel.row = r; sel.cd = 0.3;
+    burst(c * TILE + 8, r * TILE + 14, ['#c2a36b', '#8a6b47'], 6, 25);
+    renderRoster(); return;
+  }
+  if (sel && grid[r][c] !== 0) toast('Сюда героя не поставить', '#ff5d5d');
+  else { S.selected = null; renderRoster(); }
+}
+$('btnRecruit').onclick = () => {
+  const cost = recruitCost();
+  if (S.gold < cost || S.heroes.length >= MAX_HEROES) return;
+  S.gold -= cost; S.recruits++; recruit();
+};
+$('btnBarricade').onclick = () => { S.mode = S.mode === 'barricade' ? null : 'barricade'; if (S.mode) { S.selected = null; renderRoster(); toast('Нажми на клетку дороги'); } hud(); };
+$('btnWall').onclick = () => {
+  if (S.gold < WALL_COST) return;
+  S.gold -= WALL_COST; S.gateMax += 5; S.gateHp = S.gateMax;
+  log(`Стены отремонтированы и укреплены: ${S.gateMax}.`); toast('Стены укреплены');
+  burst(8, GATE.row * TILE + 8, ['#94b0c2', '#566c86'], 14, 40); hud();
+};
+$('btnTrain').onclick = () => {
+  const h = S.selected;
+  if (!h || S.phase !== 'day' || h.lvl >= 10 || S.gold < trainCost(h)) return;
+  S.gold -= trainCost(h);
+  giveXp(h, h.lvl * 8 - h.xp);
+};
+$('btnNight').onclick = startNight;
+$('btnSpeed').onclick = () => { S.speed = S.speed === 3 ? 1 : S.speed + 1; hud(); };
+$('btnBench').onclick = () => { if (S.selected && S.phase === 'day') { S.selected.col = S.selected.row = -1; renderRoster(); } };
+window.addEventListener('keydown', e => { if (e.code === 'Space' && S.phase === 'day' && !S.paused) { e.preventDefault(); startNight(); } });
+
+// ---------------------------------------------------------------- обновление
+function update(dt) {
+  S.t += dt;
+  S.shake = Math.max(0, S.shake - dt);
+  if (S.phase === 'night') {
+    if (S.spawnQueue.length) {
+      S.spawnTimer -= dt;
+      if (S.spawnTimer <= 0) { spawn(S.spawnQueue.shift()); S.spawnTimer = Math.max(0.35, 1.1 - 0.06 * S.night) * rand(0.7, 1.3); }
+    }
+    updateMonsters(dt);
+    updateHeroes(dt);
+  }
+  updateProjectiles(dt);
+  for (const p of S.particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += p.g * dt; p.life -= dt; }
+  S.particles = S.particles.filter(p => p.life > 0);
+  for (const f of S.floaters) { f.y -= 14 * dt; f.life -= dt; }
+  S.floaters = S.floaters.filter(f => f.life > 0);
+  S.monsters = S.monsters.filter(m => !m.dead);
+  if (S.phase === 'night' && !S.spawnQueue.length && !S.monsters.length && S.gateHp > 0) dawn();
+}
+function updateMonsters(dt) {
+  for (const m of S.monsters) {
+    if (m.dead) continue;
+    const def = MON[m.type];
+    m.flash = Math.max(0, m.flash - dt);
+    const step = def.speed * dt;
+    let blocker = null;
+    for (const b of S.barricades) {
+      if (b.hp > 0 && b.dist > m.dist && m.dist + step >= b.dist - 10 && (!blocker || b.dist < blocker.dist)) blocker = b;
+    }
+    if (blocker) {
+      m.dist = Math.max(m.dist, blocker.dist - 10);
+      m.atkCd -= dt;
+      if (m.atkCd <= 0) {
+        m.atkCd = 1;
+        blocker.hp -= def.dmg * 3;
+        burst(blocker.x, blocker.y + 2, ['#8a5a2b', '#5a3a22'], 3, 25);
+        if (blocker.hp <= 0) { burst(blocker.x, blocker.y, ['#8a5a2b', '#5a3a22', '#1a1c2c'], 14, 50); S.barricades = S.barricades.filter(b => b !== blocker); }
+      }
+    } else m.dist += step;
+    const p = posAt(m.dist);
+    m.x = p.x; m.y = p.y; if (p.dx) m.face = p.dx;
+    if (m.dist >= PATH_LEN) {
+      m.dead = true;
+      S.gateHp -= def.dmg; S.shake = 0.25;
+      floater(12, GATE.row * TILE, '-' + def.dmg, '#ff5d5d');
+      burst(10, GATE.row * TILE + 8, ['#94b0c2', '#566c86', '#e43b44'], 10, 50);
+      if (S.gateHp <= 0 && S.phase === 'night') { S.gateHp = 0; gameOver(); return; }
+    }
+  }
+}
+function updateHeroes(dt) {
+  for (const h of S.heroes) {
+    if (h.col < 0) continue;
+    h.anim = Math.max(0, h.anim - dt);
+    h.cd -= dt;
+    if (h.cd > 0) continue;
+    const cl = CLASSES[h.cls], p = heroPos(h), range = cl.range * TILE;
+    let target = null;
+    for (const m of S.monsters) {
+      if (m.dead) continue;
+      if (Math.hypot(m.x - p.x, m.y - p.y) <= range && (!target || m.dist > target.dist)) target = m;
+    }
+    if (!target) continue;
+    h.cd = heroRate(h); h.anim = 0.15; h.face = target.x < p.x ? -1 : 1;
+    const dmg = heroDmg(h);
+    if (h.cls === 'knight') {
+      damage(target, dmg, h);
+      for (const m of S.monsters) if (m !== target && !m.dead && Math.hypot(m.x - target.x, m.y - target.y) < 12) damage(m, dmg * 0.5, h);
+      S.particles.push({ kind: 'slash', x: target.x, y: target.y, vx: 0, vy: 0, g: 0, life: 0.15, face: h.face });
+    } else {
+      S.projectiles.push({ kind: h.cls === 'mage' ? 'fire' : 'arrow', x: p.x, y: p.y - 4, target, tx: target.x, ty: target.y,
+        speed: h.cls === 'mage' ? 110 : 190, dmg, owner: h, splash: cl.splash || 0, ang: 0 });
+    }
+  }
+}
+function updateProjectiles(dt) {
+  for (const p of S.projectiles) {
+    if (p.target && !p.target.dead) { p.tx = p.target.x; p.ty = p.target.y; }
+    const dx = p.tx - p.x, dy = p.ty - p.y, d = Math.hypot(dx, dy), mv = p.speed * dt;
+    p.ang = Math.atan2(dy, dx);
+    if (d <= mv + 1) {
+      p.dead = true;
+      if (p.kind === 'fire') {
+        for (const m of S.monsters) if (!m.dead && Math.hypot(m.x - p.tx, m.y - p.ty) <= p.splash) damage(m, p.dmg * (m === p.target ? 1 : 0.6), p.owner);
+        burst(p.tx, p.ty, ['#ef7d57', '#ffcd75', '#e43b44'], 10, 45);
+      } else if (p.target && !p.target.dead) damage(p.target, p.dmg, p.owner);
+    } else {
+      p.x += dx / d * mv; p.y += dy / d * mv;
+      if (p.kind === 'fire' && Math.random() < 0.6) S.particles.push({ x: p.x, y: p.y, vx: rand(-5, 5), vy: rand(-10, 0), g: 0, life: 0.25, color: pick(['#ef7d57', '#ffcd75']) });
+    }
+  }
+  S.projectiles = S.projectiles.filter(p => !p.dead);
+}
+
+// ---------------------------------------------------------------- отрисовка
+const dark = document.createElement('canvas'); dark.width = W; dark.height = H;
+const dg = dark.getContext('2d');
+function light(x, y, r, a) {
+  const g = dg.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, `rgba(0,0,0,${a})`); g.addColorStop(1, 'rgba(0,0,0,0)');
+  dg.fillStyle = g; dg.beginPath(); dg.arc(x, y, r, 0, Math.PI * 2); dg.fill();
+}
+function drawDarkness() {
+  if (S.darkness < 0.01) return;
+  dg.globalCompositeOperation = 'source-over';
+  dg.clearRect(0, 0, W, H);
+  dg.fillStyle = `rgba(8,6,28,${0.62 * S.darkness})`;
+  dg.fillRect(0, 0, W, H);
+  dg.globalCompositeOperation = 'destination-out';
+  const fl = Math.sin(S.t * 13) * 1.5;
+  for (const h of S.heroes) if (h.col >= 0) { const p = heroPos(h); light(p.x, p.y, 30 + fl, 0.9); }
+  for (const p of S.projectiles) if (p.kind === 'fire') light(p.x, p.y, 12, 0.8);
+  light(14, GATE.row * TILE + 4, 26 + fl, 1);
+  ctx.drawImage(dark, 0, 0);
+}
+function render() {
+  ctx.save();
+  if (S.shake > 0) ctx.translate(Math.round(rand(-2, 2)), Math.round(rand(-2, 2)));
+  ctx.drawImage(bg, 0, 0);
+  // рябь на озере
+  ctx.fillStyle = '#41a6f6';
+  for (let i = 0; i < 10; i++) {
+    const k = Math.floor(S.t * 2) * 7 + i * 13;
+    const x = 17 * TILE + ((k * 37) % (3 * TILE)), y = (k * 53) % (5 * TILE);
+    ctx.fillRect(x + 2, y, 3, 1);
+  }
+  // подсветка клеток
+  const placing = S.selected && (S.phase === 'day' || S.selected.col < 0);
+  if (placing || S.mode === 'barricade') {
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      const ok = S.mode === 'barricade' ? grid[r][c] === 1 && !S.barricades.some(b => b.col === c && b.row === r) : buildable(c, r);
+      if (ok) ctx.fillRect(c * TILE + 1, r * TILE + 1, TILE - 2, TILE - 2);
+    }
+  }
+  for (const b of S.barricades) {
+    drawSprite(ctx, 'barricade', b.x, b.y + 6);
+    if (b.hp < b.maxHp) hpBar(b.x, b.y - 5, 10, b.hp / b.maxHp, '#ffcd75');
+  }
+  if (S.selected && S.selected.col >= 0) {
+    const p = heroPos(S.selected);
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(p.x, p.y, CLASSES[S.selected.cls].range * TILE, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = '#ffc93c';
+    const x0 = S.selected.col * TILE, y0 = S.selected.row * TILE;
+    for (const [dx, dy] of [[0, 0], [13, 0], [0, 13], [13, 13]]) { ctx.fillRect(x0 + dx, y0 + dy, 3, 1); ctx.fillRect(x0 + dx + (dx ? 2 : 0), y0 + dy + (dy ? -2 : 0), 1, 3); }
+  }
+  // сущности по глубине
+  const ents = [];
+  for (const h of S.heroes) if (h.col >= 0) ents.push({ y: h.row * TILE + 14, draw: () => drawHero(h) });
+  for (const m of S.monsters) ents.push({ y: m.y + 5, draw: () => drawMonster(m) });
+  ents.sort((a, b) => a.y - b.y).forEach(e => e.draw());
+  for (const p of S.projectiles) {
+    if (p.kind === 'arrow') {
+      ctx.strokeStyle = '#e8e8e8'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - Math.cos(p.ang) * 5, p.y - Math.sin(p.ang) * 5); ctx.stroke();
+    } else {
+      ctx.fillStyle = '#ef7d57'; ctx.fillRect(Math.round(p.x) - 2, Math.round(p.y) - 2, 4, 4);
+      ctx.fillStyle = '#ffcd75'; ctx.fillRect(Math.round(p.x) - 1, Math.round(p.y) - 1, 2, 2);
+    }
+  }
+  for (const p of S.particles) {
+    if (p.kind === 'slash') {
+      ctx.strokeStyle = `rgba(255,255,255,${p.life / 0.15})`; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 6, p.face > 0 ? -1.2 : 1.9, p.face > 0 ? 1.2 : 4.3); ctx.stroke();
+    } else { ctx.fillStyle = p.color; ctx.fillRect(Math.round(p.x), Math.round(p.y), 1, 1); }
+  }
+  drawDarkness();
+  ctx.font = 'bold 8px monospace'; ctx.textAlign = 'center';
+  for (const f of S.floaters) {
+    ctx.globalAlpha = Math.min(1, f.life * 3);
+    ctx.fillStyle = '#000'; ctx.fillText(f.text, Math.round(f.x) + 1, Math.round(f.y) + 1);
+    ctx.fillStyle = f.color; ctx.fillText(f.text, Math.round(f.x), Math.round(f.y));
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+function hpBar(x, y, w, frac, col) {
+  ctx.fillStyle = '#1a1c2c'; ctx.fillRect(Math.round(x - w / 2) - 1, Math.round(y) - 1, w + 2, 3);
+  ctx.fillStyle = col; ctx.fillRect(Math.round(x - w / 2), Math.round(y), Math.max(1, Math.round(w * clamp(frac, 0, 1))), 1);
+}
+function drawHero(h) {
+  const x = h.col * TILE + 8, y = h.row * TILE + 14;
+  const rc = RAR[h.r].color;
+  ctx.fillStyle = rc;
+  ctx.fillRect(x - 4, y, 8, 1); ctx.fillRect(x - 6, y - 1, 2, 1); ctx.fillRect(x + 4, y - 1, 2, 1);
+  const lunge = h.anim > 0 ? h.face : 0;
+  const idle = S.phase === 'day' ? Math.round(Math.sin(S.t * 3 + h.id) * 0.5) : 0;
+  drawSprite(ctx, h.cls, x + lunge, y + idle, { flip: h.face < 0 });
+  if (h.r === 3 && Math.random() < 0.05) S.particles.push({ x: x + rand(-5, 5), y: y - rand(4, 12), vx: 0, vy: -8, g: 0, life: 0.5, color: '#ffc93c' });
+}
+function drawMonster(m) {
+  const def = MON[m.type], sc = def.scale || 1;
+  const bob = Math.round(Math.abs(Math.sin(S.t * 8 + m.seed)));
+  drawSprite(ctx, def.sprite, m.x, m.y + 5 - bob, { flip: m.face < 0, scale: sc, pal: def.pal, white: m.flash > 0 });
+  if (m.hp < m.maxHp) {
+    const hgt = getSprite(def.sprite).height * sc;
+    hpBar(m.x, m.y + 5 - hgt - 3, sc > 1 ? 18 : 8, m.hp / m.maxHp, '#e43b44');
+  }
+}
+
+// ---------------------------------------------------------------- цикл
+let last = performance.now(), hudTimer = 0;
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (!S.paused) {
+    const steps = S.phase === 'night' ? S.speed : 1;
+    for (let i = 0; i < steps && S.phase !== 'over'; i++) update(dt);
+  }
+  S.darkness += ((S.phase === 'night' || S.phase === 'over' ? 1 : 0) - S.darkness) * Math.min(1, dt * 1.5);
+  render();
+  hudTimer -= dt;
+  if (hudTimer <= 0) { hudTimer = 0.2; hud(); }
+  requestAnimationFrame(frame);
+}
+
+recruit({ rarity: 1, cls: 'archer', silent: true });
+recruit({ rarity: 0, cls: 'knight', silent: true });
+S.selected = null;
+renderRoster();
+modal('ТИРАН ПОГРАНИЧЬЯ',
+  `Ты единственный в мире прошёл «Оборону Империи», самую беспощадную пиксельную стратегию в истории. А потом проснулся внутри неё.<br><br>` +
+  `Теперь ты опальный принц, сосланный в крепость <b>Кордон</b> на краю <b>Озера Чудовищ</b>. Каждую ночь из воды выходят монстры, и каждую ночь стены должны устоять.<br><br>` +
+  `Нанимай героев, строй баррикады, издавай указы. Кем тебя запомнят, тираном или спасителем, решать тебе.` +
+  (best ? `<br><br>Рекорд: <b>${best}</b> ноч.` : ''),
+  [{ label: '<b>Принять командование</b><br>Выжить 10 ночей', fn: () => { log('Принц прибыл в Кордон. Гарнизон: два героя.'); toast('Расставь героев вдоль дороги'); } }]);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
