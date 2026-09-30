@@ -228,8 +228,8 @@ func enemy_strike(e: Enemy, a: Dictionary) -> bool:
 					hit = true
 					break
 		"shot":
-			projectiles.append({"pos": e.position + Vector2(0, -6), "dest": e.atk_origin, "speed": a.speed, "dmg": a.dmg,
-				"hostile": true, "gate": e.target == null, "kind": "spit", "done": false})
+			projectiles.append({"pos": e.position + Vector2(0, -6), "dest": e.atk_origin, "target": e.target, "speed": a.speed,
+				"dmg": a.dmg, "hostile": true, "gate": e.target == null, "kind": "spit", "done": false})
 			return true
 	if e.target == null:
 		var o: Vector2 = e.atk_origin if a.type == "aoe" else e.position
@@ -399,6 +399,10 @@ func _update_towers(dt: float) -> void:
 func _update_projectiles(dt: float) -> void:
 	for p in projectiles:
 		if p.hostile:
+			# Плевок летит за целью: увернуться нельзя.
+			var ht = p.target
+			if ht != null and is_instance_valid(ht) and not ht.dead:
+				p.dest = ht.position
 			var to: Vector2 = p.dest - p.pos
 			var mv: float = p.speed * dt
 			if to.length() <= mv:

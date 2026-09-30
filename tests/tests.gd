@@ -22,6 +22,7 @@ func _ready() -> void:
 	test_moving_hero_does_not_attack()
 	test_archer_kills_and_gains_xp()
 	test_enemy_targets_field_hero_not_wall()
+	test_attacks_cannot_be_dodged()
 	test_knight_taunt()
 	test_firerain_friendly_fire()
 	test_hero_death_is_permanent()
@@ -136,6 +137,33 @@ func test_enemy_targets_field_hero_not_wall() -> void:
 	check(s.target != null and s.target.on_wall(), "плевальщица достаёт до стены")
 
 
+func test_attacks_cannot_be_dodged() -> void:
+	game.new_game()
+	fresh_night()
+	var k := hero_of("knight")
+	k.position = Vector2(240, 120)
+	var e: Enemy = game.spawn("spear", Vector2(240, 90))
+	e.cooldown = 0.0
+	var hp0 := k.hp
+	for i in 30:
+		game.step(DT)
+		if e.state == "windup":
+			break
+	game.order_move(k, Vector2(262, 120))
+	run(1.2)
+	check(k.hp < hp0, "отход во время замаха не спасает от удара")
+	var a := hero_of("archer")
+	var s: Enemy = game.spawn("spitter", a.position + Vector2(0, -80))
+	var hpa := a.hp
+	for i in 90:
+		game.step(DT)
+		if s.state == "active":
+			break
+	game.order_move(a, a.position + Vector2(60, 0))
+	run(2.0)
+	check(a.hp < hpa, "плевок летит за целью")
+
+
 func test_knight_taunt() -> void:
 	game.new_game()
 	fresh_night()
@@ -235,7 +263,7 @@ func test_beacon_shop() -> void:
 
 # ------------------------------------------------------------------ баланс
 
-## Простой «командир»: жмёт способности и уводит героев из-под ударов по площади.
+## Простой «командир»: только жмёт способности, героев не двигает.
 func bot_step() -> void:
 	for h in game.heroes:
 		if h.ab_cd > 0.0:
@@ -251,15 +279,6 @@ func bot_step() -> void:
 					break
 		elif game.nearest_enemy(h.position, 40.0):
 			game.cast_ability(h, h.position)
-	for e in game.enemies:
-		if e.state == "windup" and e.atk.type == "aoe":
-			for h in game.heroes:
-				if not h.is_moving() and h.position.distance_to(e.atk_origin) < e.atk.radius + 6.0:
-					var away: Vector2 = (h.position - e.atk_origin).normalized()
-					if away == Vector2.ZERO:
-						away = Vector2.RIGHT
-					game.order_move(h, h.position + away * 45.0)
-
 
 func _no_friends_near(p: Vector2, r: float) -> bool:
 	for h in game.heroes:

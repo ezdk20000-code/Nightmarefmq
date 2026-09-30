@@ -1,10 +1,9 @@
 class_name Enemy
 extends Node2D
-## Враг. Каждая атака честно телеграфируется: контур удара на земле во время замаха
-## и красная вспышка за мгновение до удара — у игрока есть время отвести героя.
+## Враг. Уклониться от его удара нельзя — атака ведёт цель до конца замаха.
 ## Цель — ближайший герой в поле (стрелки достают и до стены), иначе ворота.
 
-const GLINT_TIME := 0.12
+const GLINT_TIME := 0.15
 
 static var DEFS := {
 	"husk": {
@@ -25,22 +24,22 @@ static var DEFS := {
 		"name": "Копейщик", "sprite": "spear", "hp": 85.0, "speed": 22.0, "poise": 45.0,
 		"aggro": 80.0, "stop": 28.0, "radius": 5.0, "ash": 10,
 		"attacks": [
-			{"type": "arc", "range": 34.0, "reach": 42.0, "arc": 22.0, "windup": 0.9, "active": 0.12, "recover": 1.0, "dmg": 30.0},
+			{"type": "arc", "range": 34.0, "reach": 42.0, "arc": 22.0, "windup": 0.9, "active": 0.12, "recover": 1.0, "dmg": 22.0},
 		],
 	},
 	"spitter": {
 		"name": "Плевальщица", "sprite": "spitter", "hp": 40.0, "speed": 24.0, "poise": 15.0,
 		"aggro": 120.0, "stop": 80.0, "radius": 5.0, "ash": 8, "ranged": true,
 		"attacks": [
-			{"type": "shot", "range": 95.0, "windup": 1.0, "active": 0.05, "recover": 1.2, "dmg": 18.0, "speed": 120.0},
+			{"type": "shot", "range": 95.0, "windup": 1.0, "active": 0.05, "recover": 1.6, "dmg": 11.0, "speed": 120.0},
 		],
 	},
 	"lord": {
 		"name": "Владыка Озера", "sprite": "lord", "scale": 2.0, "boss": true, "hp": 900.0, "speed": 30.0,
 		"poise": 220.0, "aggro": 9999.0, "stop": 26.0, "radius": 11.0, "ash": 300,
 		"attacks": [
-			{"type": "arc", "range": 34.0, "reach": 46.0, "arc": 110.0, "windup": 0.85, "active": 0.15, "recover": 0.9, "dmg": 35.0},
-			{"type": "aoe", "range": 95.0, "windup": 1.1, "active": 0.1, "recover": 1.1, "dmg": 45.0, "radius": 32.0},
+			{"type": "arc", "range": 34.0, "reach": 46.0, "arc": 110.0, "windup": 0.85, "active": 0.15, "recover": 1.0, "dmg": 28.0},
+			{"type": "aoe", "range": 95.0, "windup": 1.1, "active": 0.1, "recover": 1.3, "dmg": 32.0, "radius": 26.0},
 			{"type": "dash", "range": 140.0, "windup": 0.75, "active": 0.55, "recover": 1.3, "dmg": 40.0, "dash": 230.0, "phase": 2},
 		],
 	},
@@ -150,12 +149,11 @@ func tick(dt: float, game) -> void:
 			elif dist > (10.0 if target == null else def.stop):
 				position += facing * def.speed * (1.3 if phase == 2 else 1.0) * dt
 		"windup":
-			# Отслеживание цели только в начале замаха — дальше атака «зафиксирована».
-			var tracking := state_t < windup_time() * (0.7 if atk.type == "shot" else 0.6)
-			if tracking and atk.type == "shot":
+			# Удар не увернуть: враг ведёт цель до самого удара. Сложность — в решениях, а не в реакции.
+			if atk.type == "aoe" or atk.type == "shot":
 				atk_origin = tpos
-			elif tracking and atk.type != "aoe" and dist > 0.01:
-				atk_dir = atk_dir.slerp(to / dist, minf(1.0, dt * 6.0))
+			elif dist > 0.01:
+				atk_dir = to / dist
 				facing = atk_dir
 			if state_t >= windup_time():
 				state = "active"
@@ -244,8 +242,6 @@ func _process(delta: float) -> void:
 
 
 func _draw() -> void:
-	if state == "windup":
-		_draw_telegraph()
 	var sc: float = def.get("scale", 1.0)
 	draw_rect(Rect2(-radius, -1, radius * 2.0, 2), Color(0, 0, 0, 0.35))
 	var glint := state == "windup" and windup_time() - state_t < GLINT_TIME
@@ -257,28 +253,3 @@ func _draw() -> void:
 		draw_rect(Rect2(-5, top - 3, 10, 2), Color("1a1c2c"))
 		draw_rect(Rect2(-5, top - 3, 10.0 * hp / max_hp, 1), Color("e43b44"))
 
-
-func _draw_telegraph() -> void:
-	var k := clampf(state_t / maxf(windup_time(), 0.01), 0.0, 1.0)
-	var line := Color(1.0, 0.2, 0.15, 0.35 + 0.55 * k)
-	var fill := Color(1.0, 0.2, 0.15, 0.08 + 0.17 * k)
-	match atk.type:
-		"arc":
-			var ang := atk_dir.angle()
-			var half := deg_to_rad(atk.arc) * 0.5
-			var pts := PackedVector2Array([Vector2.ZERO])
-			for i in 11:
-				pts.append(Vector2.from_angle(ang - half + 2.0 * half * i / 10.0) * atk.reach)
-			draw_colored_polygon(pts, fill)
-			pts.append(Vector2.ZERO)
-			draw_polyline(pts, line, 1.0)
-		"aoe":
-			var c := atk_origin - position
-			draw_circle(c, atk.radius * k, fill)
-			draw_arc(c, atk.radius, 0.0, TAU, 32, line, 1.0)
-		"dash":
-			draw_line(Vector2(0, -3), Vector2(0, -3) + atk_dir * atk.dash * atk.active, line, 1.0)
-		"shot":
-			var c := atk_origin - position
-			draw_line(Vector2(0, -6), c, Color(line, line.a * 0.5), 1.0)
-			draw_arc(c, 9.0, 0.0, TAU, 16, line, 1.0)
