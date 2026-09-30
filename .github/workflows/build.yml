@@ -1,0 +1,55 @@
+name: Тесты и сборка
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Кэш Godot
+        uses: actions/cache@v4
+        with:
+          path: ~/godot-cache
+          key: godot-4.5-stable-v1
+
+      - name: Установка Godot 4.5 и шаблонов экспорта
+        run: |
+          mkdir -p ~/godot-cache && cd ~/godot-cache
+          if [ ! -f godot ]; then
+            curl -sSL -o g.zip https://github.com/godotengine/godot/releases/download/4.5-stable/Godot_v4.5-stable_linux.x86_64.zip
+            unzip -q g.zip && rm g.zip && mv Godot_v4.5-stable_linux.x86_64 godot
+          fi
+          if [ ! -d templates ]; then
+            curl -sSL -o t.tpz https://github.com/godotengine/godot/releases/download/4.5-stable/Godot_v4.5-stable_export_templates.tpz
+            unzip -q t.tpz && rm t.tpz
+            cd templates && rm -f android_* ios.zip macos.zip visionos.zip *arm* *x86_32* web_* && cd ..
+          fi
+          mkdir -p ~/.local/share/godot/export_templates/4.5.stable
+          cp -r templates/* ~/.local/share/godot/export_templates/4.5.stable/
+          echo "$HOME/godot-cache" >> "$GITHUB_PATH"
+
+      - name: Импорт проекта
+        run: godot --headless --import || true
+
+      - name: Автотесты
+        run: godot --headless res://tests/tests.tscn
+
+      - name: Сборка Windows и Linux
+        run: |
+          mkdir -p build/windows build/linux
+          godot --headless --export-release "Windows" build/windows/PepelKordona.exe
+          godot --headless --export-release "Linux" build/linux/PepelKordona.x86_64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PepelKordona-windows
+          path: build/windows
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PepelKordona-linux
+          path: build/linux
