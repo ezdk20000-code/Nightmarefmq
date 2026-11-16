@@ -1,0 +1,56 @@
+rules_version = '2';
+
+// Правила доступа к базе клана NIGHTMARE.
+// Вставь их в Firebase Console → Firestore Database → Rules → Publish.
+service cloud.firestore {
+  match /databases/{db}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function memberDoc() { return /databases/$(db)/documents/members/$(request.auth.uid); }
+    function isMember() { return signedIn() && exists(memberDoc()); }
+    function access() { return get(memberDoc()).data.access; }
+    function isLeader() { return isMember() && access() == 'leader'; }
+    function isEditor() { return isMember() && access() in ['leader', 'officer']; }
+
+    // Отметка о первом запуске: создаётся один раз, когда глава регистрируется.
+    match /meta/setup {
+      allow get: if true;
+      allow create: if signedIn() && request.resource.data.leaderUid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // Участники клана. Наличие документа = есть доступ к сайту.
+    match /members/{uid} {
+      allow read: if isMember();
+      allow create: if isLeader()
+        || (signedIn() && uid == request.auth.uid
+            && request.resource.data.access == 'leader'
+            && getAfter(/databases/$(db)/documents/meta/setup).data.leaderUid == request.auth.uid);
+      // Глава меняет всё, кроме своих прав; игрок может поменять только свой ник.
+      allow update: if (isLeader() && !(uid == request.auth.uid && request.resource.data.access != 'leader'))
+        || (isMember() && uid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nick']));
+      allow delete: if isLeader() && uid != request.auth.uid;
+    }
+
+    match /roles/{id} {
+      allow read: if isMember();
+      allow write: if isEditor();
+    }
+
+    match /maps/{id} {
+      allow read: if isMember();
+      allow write: if isEditor();
+    }
+
+    match /tactics/{id} {
+      allow read: if isMember();
+      allow create, delete: if isEditor();
+      // Офицеры и глава редактируют; любой участник может отметить «Я понял» только за себя.
+      allow update: if isEditor()
+        || (isMember()
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['acks'])
+            && request.resource.data.acks.diff(resource.data.get('acks', {})).affectedKeys().hasOnly([request.auth.uid]));
+    }
+  }
+}
