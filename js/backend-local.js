@@ -11,6 +11,7 @@ function load() {
 
 export function createLocalBackend() {
   let db = load() || { users: {}, meta: {}, members: {}, roles: {}, tactics: {}, maps: {} };
+  for (const k of ['users', 'meta', 'members', 'roles', 'tactics', 'maps', 'situations']) db[k] = db[k] || {};
   const subs = {};
   let authCb = null;
   let current = null;

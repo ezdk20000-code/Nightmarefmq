@@ -43,6 +43,16 @@ service cloud.firestore {
       allow write: if isEditor();
     }
 
+    // Ситуации: как каждая роль действует в конкретной ситуации.
+    match /situations/{id} {
+      allow read: if isMember();
+      allow create, delete: if isEditor();
+      allow update: if isEditor()
+        || (isMember()
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['acks'])
+            && request.resource.data.acks.diff(resource.data.get('acks', {})).affectedKeys().hasOnly([request.auth.uid]));
+    }
+
     match /tactics/{id} {
       allow read: if isMember();
       allow create, delete: if isEditor();

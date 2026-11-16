@@ -120,7 +120,7 @@ export class Board {
         e.preventDefault();
         s.setPointerCapture(e.pointerId);
         const target = tok ? this.phase.positions[tok.dataset.token] : this.phase.labels[+lab.dataset.label];
-        this.drag = { target, dx: target.x - p.x, dy: target.y - p.y };
+        this.drag = { target, dx: target.x - p.x, dy: target.y - p.y, tok: !!tok };
         return;
       }
       if (this.mode === 'arrow') {
@@ -139,8 +139,9 @@ export class Board {
       if (!this.drag && !this.temp) return;
       const p = this.pt(e);
       if (this.drag) {
-        this.drag.target.x = clamp(p.x + this.drag.dx, 0, W);
-        this.drag.target.y = clamp(p.y + this.drag.dy, 0, H);
+        const m = this.drag.tok ? 30 : 0; // фишке нужно место под ник
+        this.drag.target.x = clamp(p.x + this.drag.dx, m, W - m);
+        this.drag.target.y = clamp(p.y + this.drag.dy, m, H - (this.drag.tok ? 52 : 0));
       } else { this.temp.x2 = p.x; this.temp.y2 = p.y; }
       this.render();
     });
