@@ -295,3 +295,47 @@ input[type=checkbox], input[type=radio] { width: auto; display: inline; margin: 
   .sit-list a { white-space: nowrap; }
   .sit-row, .my-sits li { grid-template-columns: 1fr; gap: 4px; }
 }
+
+/* role page (v2: everything through the role) */
+.role-hero { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; flex-wrap: wrap; margin-bottom: 20px; padding: 28px; border-radius: 16px; border: 1px solid var(--line); border-top: 4px solid var(--c); background: linear-gradient(120deg, color-mix(in srgb, var(--c) 18%, transparent), transparent 60%), var(--panel); }
+.role-hero h1 { font-size: 40px; display: flex; align-items: center; gap: 14px; margin: 6px 0 10px; }
+.role-icon { font-size: 44px; }
+.role-hero .lead { font-size: 17px; color: var(--text); max-width: 760px; }
+.role-hero .holders { margin-top: 6px; }
+.chip.me { border-color: var(--red); color: var(--text); }
+.role-sections { display: grid; gap: 16px; }
+.role-sections > .card { margin: 0; border-left: 3px solid var(--c, var(--line)); }
+.role-sections h2 { font-size: 22px; }
+.duties.big li { font-size: 16px; padding: 6px 0 6px 22px; }
+.rt-tactic { border-top: 1px solid var(--line); padding: 16px 0 6px; }
+.rt-tactic:first-of-type { border-top: 0; padding-top: 0; }
+.rt-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 10px; font-size: 17px; }
+.phases { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.phases li { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.phases li.empty { border-style: dashed; }
+.ph-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.ph-title .phase-tag { background: rgba(211, 20, 47, .15); padding: 1px 8px; border-radius: 6px; margin: 0; }
+.ph-act { font-size: 16px; }
+.ph-trigger { margin-top: 6px; font-size: 13px; color: var(--hot); }
+.ph-trigger b { color: var(--hot); }
+.ph-edit { display: block; margin-bottom: 10px; color: var(--text); font-size: 14px; }
+.ph-edit textarea { resize: none; overflow: hidden; margin-top: 6px; }
+.link { background: none; border: 0; color: var(--red2); cursor: pointer; font: inherit; padding: 0; text-decoration: underline; }
+.link-card { color: var(--text); transition: transform .15s, border-color .15s; display: block; margin: 0; }
+.link-card:hover { text-decoration: none; transform: translateY(-2px); border-color: #4a2a3a; }
+.link-card.me { box-shadow: 0 0 0 1px var(--c), 0 0 30px color-mix(in srgb, var(--c) 25%, transparent); }
+.hq-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
+.hq-tabs .tab { color: var(--muted); }
+.hq-tabs .tab:hover { color: var(--text); text-decoration: none; }
+.modal.wide { max-width: 1000px; }
+.actions li.empty { opacity: .6; }
+.eyebrow-sm { display: block; font-size: 12px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--red2); margin-bottom: 4px; }
+.empty-state { text-align: center; padding: 40px 24px; }
+.empty-state p { max-width: 620px; margin-left: auto; margin-right: auto; }
+.sit-row .sit-who { font-size: 15px; color: var(--text); }
+@media (max-width: 640px) {
+  .role-hero { padding: 18px; }
+  .role-hero h1 { font-size: 28px; }
+  .role-icon { font-size: 32px; }
+  .rt-head { flex-direction: column; gap: 4px; }
+}

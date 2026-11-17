@@ -7,7 +7,6 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const nl = (s) => esc(s).replace(/\n/g, '<br>');
 const clone = (o) => JSON.parse(JSON.stringify(o));
-const fmtDate = (t) => t ? new Date(t).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
 const LOGIN_RE = /^[a-z0-9_.-]{3,24}$/;
 
 const ACCESS = {
@@ -22,6 +21,22 @@ const SEED_ROLES = [
   { name: 'Штурмовик', color: '#ff7a1a', icon: '⚔', description: 'Основная ударная сила, прорывает оборону.', duties: ['Идёт на прорыв по сигналу', 'Держит темп атаки'] },
   { name: 'Поддержка', color: '#7dff6a', icon: '✚', description: 'Помогает союзникам и закрывает слабые места.', duties: ['Страхует штурмовиков', 'Подбирает и прикрывает отставших'] },
   { name: 'Защитник', color: '#9b5cff', icon: '🛡', description: 'Держит ключевую точку и тылы.', duties: ['Не уходит с позиции без приказа', 'Предупреждает о заходе с фланга'] },
+];
+
+// Ситуация = что случилось + что делает каждая роль.
+const SEED_SITUATIONS = [
+  { title: 'Команда внутри, ты снаружи', common: 'Отставшего не ждём, если это ломает план.',
+    byRoleName: { 'Командир': 'Решает: ждать или продолжать.', 'Разведчик': 'Остаётся снаружи и докладывает, кто подходит.', 'Штурмовик': 'Не лезет один, заходит по команде.', 'Поддержка': 'Заходит к команде безопасным путём.', 'Защитник': 'Прикрывает вход снаружи.' } },
+  { title: 'Ты внутри, команда снаружи', common: 'Не уходить вглубь, ждать команду у входа.',
+    byRoleName: { 'Командир': 'Держит точку у входа и ведёт команду через чат.', 'Разведчик': 'Тихо осматривается, докладывает обстановку.', 'Штурмовик': 'Занимает укрытие, бой первым не начинает.', 'Поддержка': 'Ищет безопасное место и ждёт команду.', 'Защитник': 'Держит вход изнутри.' } },
+  { title: 'Команда разделилась', common: 'Каждая часть пишет, где она. Встречаемся в точке сбора.',
+    byRoleName: { 'Командир': 'Называет точку сбора.', 'Разведчик': 'Ищет безопасный путь между группами.', 'Штурмовик': 'Остаётся с ближайшей группой.', 'Поддержка': 'Идёт к группе, где меньше людей.', 'Защитник': 'Держит точку сбора.' } },
+  { title: 'Потеряли командира', common: 'Командование переходит к заместителю.',
+    byRoleName: { 'Командир': 'До боя назначает заместителя.', 'Разведчик': 'Докладывает обстановку новому командиру.', 'Штурмовик': 'Останавливает атаку без приказа.', 'Поддержка': 'Помогает командиру, если безопасно.', 'Защитник': 'Прикрывает отход к точке сбора.' } },
+  { title: 'Атака с тыла', common: 'Кто увидел первым — сразу пишет «ТЫЛ!».',
+    byRoleName: { 'Командир': 'Разворачивает ближайших на угрозу.', 'Разведчик': 'Говорит, откуда и сколько.', 'Штурмовик': 'Разворачивается по команде.', 'Поддержка': 'Уходит за спины штурмовиков.', 'Защитник': 'Первым встречает удар.' } },
+  { title: 'Отступление', common: 'Отходим к точке сбора, никто не остаётся один.',
+    byRoleName: { 'Командир': 'Объявляет отход и точку сбора.', 'Разведчик': 'Проверяет путь отхода.', 'Штурмовик': 'Уходит последним, прикрывает.', 'Поддержка': 'Помогает отставшим.', 'Защитник': 'Держит проход, пока все не уйдут.' } },
 ];
 
 function toast(msg, kind = '') {
@@ -75,32 +90,40 @@ async function imageToDataUrl(file, maxW = 1400) {
   return out;
 }
 
+const autogrow = (t) => { t.style.height = 'auto'; t.style.height = t.scrollHeight + 2 + 'px'; };
+
 // ───────────────────────── state ─────────────────────────
 const COLLECTIONS = ['members', 'roles', 'tactics', 'maps', 'situations'];
 let store;
 const S = {
   user: null, setupDone: false, ready: false,
   members: [], roles: [], tactics: [], maps: [], situations: [],
-  sitDirty: null,
   loaded: new Set(), unsubs: [],
-  draft: null, phaseIdx: 0, viewPhase: 0, remoteChanged: false,
+  draft: null, phaseIdx: 0, viewPhase: 0, dirty: false,
 };
 
 const me = () => S.members.find((m) => m.id === S.user?.uid);
 const isLeader = () => me()?.access === 'leader';
 const isEditor = () => ['leader', 'officer'].includes(me()?.access);
 const roleOf = (m) => S.roles.find((r) => r.id === m?.roleId);
+const role = (id) => S.roles.find((r) => r.id === id);
 const member = (id) => S.members.find((m) => m.id === id);
+const myRole = () => roleOf(me());
+const holders = (r) => S.members.filter((m) => m.roleId === r.id);
 const sortedMembers = () => [...S.members].sort((a, b) => {
   const o = { leader: 0, officer: 1, member: 2 };
   return (o[a.access] - o[b.access]) || a.nick.localeCompare(b.nick);
 });
-const tokenInfo = (uid) => {
-  const m = member(uid);
-  if (!m) return null;
-  return { label: m.nick, color: roleOf(m)?.color || '#777', me: uid === S.user?.uid };
-};
+const sortedTactics = () => [...S.tactics].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.title.localeCompare(b.title));
+const sortedSituations = () => [...S.situations].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.title.localeCompare(b.title));
+const sitText = (x, id) => (id === 'common' ? x.common : (x.byRole || {})[id]) || '';
 const mapImage = (id) => S.maps.find((m) => m.id === id)?.image || null;
+// Фишки на схеме — это роли.
+const tokenInfo = (rid) => {
+  const r = role(rid);
+  if (!r) return null;
+  return { label: r.name, color: r.color, me: rid === myRole()?.id };
+};
 
 function roleBadge(r) {
   if (!r) return '<span class="role-badge none">без роли</span>';
@@ -109,16 +132,21 @@ function roleBadge(r) {
 
 // ───────────────────────── routing ─────────────────────────
 function route() {
-  const h = location.hash.replace(/^#\/?/, '') || 'brief';
-  const [page, id, sub] = h.split('/');
-  return { page, id, sub };
+  const h = location.hash.replace(/^#\/?/, '') || 'me';
+  const [page, id, sub, extra] = h.split('/');
+  return { page, id, sub, extra };
 }
 window.addEventListener('hashchange', () => {
-  const r = route();
-  if (r.sub !== 'edit') S.draft = null;
-  S.sitDirty = null;
+  if (S.dirty && !confirm('Есть несохранённые изменения. Уйти без сохранения?')) {
+    history.replaceState(null, '', S.lastHash || '#/');
+    return;
+  }
+  S.dirty = false;
+  if (!location.hash.endsWith('/edit')) S.draft = null;
+  S.lastHash = location.hash;
   render();
 });
+window.addEventListener('beforeunload', (e) => { if (S.dirty) e.preventDefault(); });
 
 // ───────────────────────── boot ─────────────────────────
 async function boot() {
@@ -131,6 +159,7 @@ async function boot() {
   }
   if (store.mode === 'local') $('#demo-banner').hidden = false;
   try { S.setupDone = await store.isSetupDone(); } catch (e) { toast(e.message, 'err'); }
+  S.lastHash = location.hash;
   store.onAuth((u) => {
     S.unsubs.forEach((f) => f()); S.unsubs = []; S.loaded.clear();
     S.user = u; S.ready = true;
@@ -152,50 +181,40 @@ async function boot() {
   });
 }
 
-function onData(name) {
+function onData() {
   if (S.loaded.size < COLLECTIONS.length) return;
   if (!me()) {
     toast('Твой доступ отозван главой клана', 'err');
     store.signOut();
     return;
   }
-  const r = route();
-  if (r.page === 'situations' && S.sitDirty) { renderNav(); return; } // не сбиваем ввод
-  if (r.sub === 'edit' && S.draft) {
-    const col = S.draftKind === 'situation' ? 'situations' : 'tactics';
-    if (name === col && S.draft.id) {
-      const t = S[col].find((x) => x.id === S.draft.id);
-      if (t && t.updatedAt !== S.draft.updatedAt && t.updatedBy !== S.user.uid) {
-        S.remoteChanged = true;
-        const b = $('#remote-warn'); if (b) b.hidden = false;
-      }
-    }
-    renderNav();
-    return; // не перерисовываем редактор, чтобы не потерять ввод
-  }
+  if (S.dirty) { renderNav(); return; } // не перерисовываем форму, чтобы не потерять ввод
   render();
 }
 
 // ───────────────────────── render root ─────────────────────────
 function render() {
   const app = $('#app');
+  app.oninput = null; // «не сохранено» ставят только формы редактирования
   if (!S.ready) { app.innerHTML = '<div class="loader">NIGHTMARE</div>'; return; }
   if (!S.user) { $('#nav').innerHTML = ''; return renderAuth(app); }
   if (S.loaded.size < COLLECTIONS.length || !me()) { app.innerHTML = '<div class="loader">NIGHTMARE</div>'; return; }
   renderNav();
   const r = route();
-  const views = { brief: viewBrief, roster: viewRoster, roles: viewRoles, tactics: viewTactics, tactic: viewTactic, situations: viewSituations, situation: (a, r) => { location.hash = `#/situations/${r.id || ''}`; }, maps: viewMaps, profile: viewProfile };
-  (views[r.page] || viewBrief)(app, r);
-  window.scrollTo({ top: window.scrollY });
+  const views = { me: viewMe, roles: viewRoles, role: viewRole, hq: viewHq, profile: viewProfile };
+  (views[r.page] || viewMe)(app, r);
 }
 
 function renderNav() {
-  const r = route().page;
+  const r = route();
   const m = me();
-  const links = [['brief', 'Брифинг'], ['tactics', 'Тактики'], ['situations', 'Ситуации'], ['roster', 'Состав'], ['roles', 'Роли'], ['maps', 'Карты']];
+  const mine = myRole();
+  const links = [['me', 'Моя роль'], ['roles', 'Все роли']];
+  if (isEditor()) links.push(['hq', 'Штаб']);
+  const active = (k) => r.page === k || (k === 'roles' && r.page === 'role' && r.id !== mine?.id) || (k === 'me' && r.page === 'role' && r.id === mine?.id);
   $('#nav').innerHTML = `
-    ${links.map(([k, t]) => `<a href="#/${k}" class="${r === k || r === k.replace(/s$/, '') ? 'active' : ''}">${t}</a>`).join('')}
-    <a href="#/profile" class="nav-me ${r === 'profile' ? 'active' : ''}"><span class="dot" style="--c:${esc(roleOf(m)?.color || '#777')}"></span>${esc(m?.nick)}</a>
+    ${links.map(([k, t]) => `<a href="#/${k}" class="${active(k) ? 'active' : ''}">${t}</a>`).join('')}
+    <a href="#/profile" class="nav-me ${r.page === 'profile' ? 'active' : ''}"><span class="dot" style="--c:${esc(mine?.color || '#777')}"></span>${esc(m?.nick)}</a>
     <button class="btn ghost sm" id="logout">Выйти</button>`;
   $('#logout').onclick = () => store.signOut();
 }
@@ -241,66 +260,245 @@ function renderAuth(app) {
   };
 }
 
-// ───────────────────────── brief ─────────────────────────
-function viewBrief(app) {
-  const m = me(); const r = roleOf(m);
-  const tactics = [...S.tactics].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  const myTasks = tactics.map((t) => {
-    const steps = (t.phases || []).map((p, i) => ({ i, name: p.name, act: (p.actions || {})[m.id] })).filter((s) => s.act);
-    return { t, steps };
-  });
+// ───────────────────────── моя роль ─────────────────────────
+function viewMe(app) {
+  const r = myRole();
+  if (r) return viewRole(app, { page: 'role', id: r.id });
+  const m = me();
+  app.innerHTML = `
+    <div class="card empty-state">
+      <div class="sigil">☠</div>
+      <h2>${esc(m.nick)}, у тебя пока нет роли</h2>
+      <p class="muted">Роль назначает глава клана. Как только она появится, здесь будет всё, что тебе нужно: обязанности, действия в тактиках и поведение в разных ситуациях.</p>
+      <p><a class="btn ghost" href="#/roles">Посмотреть все роли</a>${isLeader() ? ' <a class="btn primary" href="#/hq/members">Назначить роли в составе</a>' : ''}</p>
+    </div>`;
+}
+
+// ───────────────────────── страница роли ─────────────────────────
+function viewRole(app, rt) {
+  if (rt.sub === 'edit') return viewRoleEdit(app, rt);
+  const r = role(rt.id);
+  if (!r) { app.innerHTML = '<div class="card"><p>Роль не найдена.</p><a href="#/roles">← Все роли</a></div>'; return; }
+  const mine = r.id === myRole()?.id;
+  const ed = isEditor();
+  const ppl = holders(r);
+  const tactics = sortedTactics();
+  const sits = sortedSituations().filter((x) => sitText(x, r.id) || x.common);
 
   app.innerHTML = `
-    <section class="hero">
-      <div>
-        <div class="eyebrow">Брифинг бойца</div>
-        <h1>${esc(m.nick)}</h1>
-        <div class="row gap">${roleBadge(r)}<span class="access ${ACCESS[m.access].cls}">${ACCESS[m.access].name}</span></div>
+    <section class="role-hero" style="--c:${esc(r.color)}">
+      <div class="role-hero-main">
+        <div class="eyebrow">${mine ? 'Моя роль' : 'Роль'}</div>
+        <h1><span class="role-icon">${esc(r.icon || '')}</span>${esc(r.name)}</h1>
+        ${r.description ? `<p class="lead">${nl(r.description)}</p>` : ''}
+        <div class="holders">${ppl.length ? ppl.map((m) => `<span class="chip ${m.id === S.user.uid ? 'me' : ''}">${esc(m.nick)}</span>`).join('') : '<span class="muted sm">никто не назначен</span>'}</div>
+      </div>
+      <div class="row gap">
+        ${ed ? `<a class="btn primary" href="#/role/${r.id}/edit">Редактировать</a>` : ''}
+        ${mine ? '' : '<a class="btn ghost" href="#/roles">Все роли</a>'}
       </div>
     </section>
 
-    <div class="grid two">
-      <section class="card role-card" style="--c:${esc(r?.color || '#555')}">
-        <h2>Моя роль</h2>
-        ${r ? `
-          <div class="role-title">${esc(r.icon || '')} ${esc(r.name)}</div>
-          <p>${nl(r.description)}</p>
-          ${(r.duties || []).length ? `<h3>Обязанности</h3><ul class="duties">${r.duties.map((d) => `<li>${esc(d)}</li>`).join('')}</ul>` : ''}
-        ` : '<p class="muted">Тебе ещё не назначили роль. Глава назначает роли в разделе «Состав».</p>'}
+    <div class="role-sections">
+      <section class="card" style="--c:${esc(r.color)}">
+        <h2>Обязанности</h2>
+        ${(r.duties || []).length ? `<ul class="duties big">${r.duties.map((d) => `<li>${esc(d)}</li>`).join('')}</ul>` : '<p class="muted">Пока не расписаны.</p>'}
+      </section>
+
+      <section class="card" style="--c:${esc(r.color)}">
+        <h2>В тактиках</h2>
+        ${tactics.length ? tactics.map((t) => `
+          <div class="rt-tactic">
+            <div class="rt-head">
+              <div><b>${esc(t.title)}</b>${t.description ? `<div class="muted sm">${nl(t.description)}</div>` : ''}</div>
+              ${ed ? `<a class="muted sm" href="#/hq/tactic/${t.id}">схема и все роли →</a>` : ''}
+            </div>
+            <ol class="phases">
+              ${(t.phases || []).map((p, i) => {
+                const act = (p.actions || {})[r.id];
+                const hasBoard = (p.positions || {})[r.id] || (p.arrows || []).length;
+                return `<li class="${act ? '' : 'empty'}">
+                  <div class="ph-title"><span class="phase-tag">${i + 1}</span><b>${esc(p.name || 'Фаза ' + (i + 1))}</b>
+                    ${hasBoard ? `<button class="link sm" data-board="${t.id}|${i}">схема</button>` : ''}
+                  </div>
+                  <div class="ph-act">${act ? nl(act) : '<span class="muted">действие не задано</span>'}</div>
+                  ${p.trigger ? `<div class="ph-trigger">→ дальше по сигналу: <b>${esc(p.trigger)}</b></div>` : ''}
+                </li>`;
+              }).join('') || '<li class="muted">Фаз нет.</li>'}
+            </ol>
+          </div>`).join('') : `<p class="muted">Тактик пока нет.${ed ? ' <a href="#/hq/tactics">Создать в штабе</a>.' : ''}</p>`}
+      </section>
+
+      <section class="card" style="--c:${esc(r.color)}">
+        <h2>Если что-то пошло не так</h2>
+        ${sits.length ? `<div class="sit-rows">${sits.map((x) => {
+          const own = sitText(x, r.id);
+          return `<div class="sit-row" style="--c:${esc(r.color)}">
+            <div class="sit-who">${esc(x.title)}</div>
+            <div>${own ? nl(own) : `<span class="muted">всем: </span>${nl(x.common)}`}${own && x.common ? `<div class="muted sm">всем: ${nl(x.common)}</div>` : ''}</div>
+          </div>`;
+        }).join('')}</div>` : `<p class="muted">Ситуаций пока нет.${ed ? ' <a href="#/hq/situations">Добавить в штабе</a>.' : ''}</p>`}
+      </section>
+    </div>`;
+
+  $$('[data-board]', app).forEach((b) => b.onclick = () => {
+    const [tid, i] = b.dataset.board.split('|');
+    const t = S.tactics.find((x) => x.id === tid);
+    const ph = t.phases[+i];
+    modal(`<div class="eyebrow-sm">${esc(t.title)} · фаза ${+i + 1}</div><h2>${esc(ph.name || 'Фаза')}</h2>
+      <div class="board-wrap"><svg id="mboard"></svg></div>
+      <div class="modal-actions"><button class="btn primary" data-close>Закрыть</button></div>`, (w) => {
+      w.querySelector('.modal').classList.add('wide');
+      const board = new Board($('#mboard', w), { readOnly: true, tokenInfo });
+      board.setData(clone(ph), mapImage(t.mapId));
+    });
+  });
+}
+
+// Редактирование роли: описание + поведение во всех тактиках и ситуациях в одном месте.
+function viewRoleEdit(app, rt) {
+  if (!isEditor()) { location.hash = `#/role/${rt.id}`; return; }
+  const r = role(rt.id);
+  if (!r) { app.innerHTML = '<div class="card">Роль не найдена.</div>'; return; }
+  const tactics = sortedTactics();
+  const sits = sortedSituations();
+  const colors = ['#c4142b', '#ff7a1a', '#ffd23f', '#7dff6a', '#3fd0ff', '#4d6bff', '#9b5cff', '#ff4fd8', '#e8e6ea'];
+
+  app.innerHTML = `
+    <div class="page-head">
+      <div><a href="#/role/${r.id}" class="muted sm">← Отмена</a><h1>${esc(r.name)}: редактирование</h1></div>
+      <div class="row gap">
+        <button class="btn ghost danger" id="del-r">Удалить роль</button>
+        <button class="btn primary" id="save-r">Сохранить всё</button>
+      </div>
+    </div>
+
+    <div class="role-sections">
+      <section class="card form-grid">
+        <div class="row gap span2">
+          <label class="w-icon">Значок<input id="r-icon" maxlength="2" value="${esc(r.icon || '')}" placeholder="⚔"></label>
+          <label class="grow">Название<input id="r-name" maxlength="30" value="${esc(r.name)}"></label>
+        </div>
+        <label class="span2">Цвет<div class="swatches">${colors.map((c) => `<label class="swatch" style="--c:${c}"><input type="radio" name="color" value="${c}" ${c === r.color ? 'checked' : ''}></label>`).join('')}<input type="color" id="r-custom" value="${esc(r.color)}"></div></label>
+        <label class="span2">Описание<textarea id="r-desc" rows="2">${esc(r.description || '')}</textarea></label>
+        <label class="span2">Обязанности <span class="muted sm">(каждая с новой строки)</span><textarea id="r-duties" rows="4">${esc((r.duties || []).join('\n'))}</textarea></label>
       </section>
 
       <section class="card">
-        <h2>Кто за что отвечает</h2>
-        <ul class="mini-roster">
-          ${sortedMembers().map((x) => `<li class="${x.id === m.id ? 'me' : ''}"><span class="dot" style="--c:${esc(roleOf(x)?.color || '#555')}"></span><b>${esc(x.nick)}</b>${roleBadge(roleOf(x))}</li>`).join('')}
-        </ul>
+        <h2>В тактиках</h2>
+        <p class="muted sm">Что делает ${esc(r.name)} в каждой фазе. Сами тактики, фазы и схемы создаются в <a href="#/hq/tactics">штабе</a>.</p>
+        ${tactics.map((t) => `
+          <div class="rt-tactic">
+            <div class="rt-head"><b>${esc(t.title)}</b><a class="muted sm" href="#/hq/tactic/${t.id}/edit">изменить тактику →</a></div>
+            ${(t.phases || []).map((p, i) => `
+              <label class="ph-edit"><span class="ph-title"><span class="phase-tag">${i + 1}</span><b>${esc(p.name || 'Фаза ' + (i + 1))}</b>${p.trigger ? `<span class="muted sm"> · дальше по сигналу «${esc(p.trigger)}»</span>` : ''}</span>
+              <textarea rows="1" data-act="${t.id}|${i}" placeholder="Что делает ${esc(r.name)} в этой фазе">${esc((p.actions || {})[r.id] || '')}</textarea></label>`).join('')}
+          </div>`).join('') || '<p class="muted">Тактик пока нет.</p>'}
       </section>
-    </div>
 
-    <section class="card">
-      <h2>Мои задачи в тактиках</h2>
-      ${myTasks.length ? myTasks.map(({ t, steps }) => `
-        <div class="task-block">
-          <div class="task-head">
-            <a href="#/tactic/${t.id}" class="task-title">${esc(t.title)}</a>
-          </div>
-          ${steps.length ? `<ol class="steps">${steps.map((s) => `<li><span class="phase-tag">Фаза ${s.i + 1}${s.name ? ' · ' + esc(s.name) : ''}</span>${nl(s.act)}</li>`).join('')}</ol>`
-            : '<p class="muted sm">Для тебя в этой тактике нет отдельных действий — изучи общую схему.</p>'}
-        </div>`).join('') : `<p class="muted">Тактик пока нет.${isEditor() ? ' <a href="#/tactics">Создай первую</a>.' : ''}</p>`}
-    </section>
+      <section class="card">
+        <h2>Если что-то пошло не так</h2>
+        <p class="muted sm">Как ведёт себя ${esc(r.name)} в каждой ситуации. Список ситуаций и общие правила — в <a href="#/hq/situations">штабе</a>.</p>
+        ${sits.map((x) => `
+          <label class="ph-edit"><span class="ph-title"><b>${esc(x.title)}</b>${x.common ? `<span class="muted sm"> · всем: ${esc(x.common)}</span>` : ''}</span>
+          <textarea rows="1" data-sit="${x.id}" placeholder="Что делает ${esc(r.name)}">${esc(sitText(x, r.id))}</textarea></label>`).join('') || '<p class="muted">Ситуаций пока нет.</p>'}
+      </section>
+    </div>`;
 
-    <section class="card">
-      <div class="row between"><h2>Что я делаю в ситуациях</h2><a href="#/situations" class="sm">Все ситуации →</a></div>
-      ${mySituationsHtml(m)}
-    </section>`;
+  $$('textarea', app).forEach((t) => { autogrow(t); t.addEventListener('input', () => autogrow(t)); });
+  app.oninput = () => { S.dirty = true; };
+  $('#r-custom').oninput = () => $$('[name=color]', app).forEach((x) => { x.checked = false; });
+
+  $('#save-r').onclick = (e) => busy(e.currentTarget, async () => {
+    const name = $('#r-name').value.trim();
+    if (!name) throw new Error('У роли должно быть название');
+    const color = $('[name=color]:checked', app)?.value || $('#r-custom').value;
+    await store.save('roles', r.id, {
+      ...r, name, icon: $('#r-icon').value.trim(), color,
+      description: $('#r-desc').value.trim(),
+      duties: $('#r-duties').value.split('\n').map((s) => s.trim()).filter(Boolean),
+      id: undefined,
+    });
+    // тактики: обновляем только те, где текст изменился
+    for (const t of tactics) {
+      let changed = false;
+      const phases = clone(t.phases || []);
+      $$(`[data-act^="${t.id}|"]`, app).forEach((ta) => {
+        const i = +ta.dataset.act.split('|')[1];
+        const v = ta.value.trim();
+        const p = phases[i]; p.actions = p.actions || {};
+        if ((p.actions[r.id] || '') !== v) { changed = true; if (v) p.actions[r.id] = v; else delete p.actions[r.id]; }
+      });
+      if (changed) await store.patch('tactics', t.id, { phases, updatedAt: Date.now(), updatedBy: S.user.uid });
+    }
+    for (const x of sits) {
+      const v = $(`[data-sit="${x.id}"]`, app).value.trim();
+      if (sitText(x, r.id) !== v) await store.patch('situations', x.id, { [`byRole.${r.id}`]: v, updatedAt: Date.now(), updatedBy: S.user.uid });
+    }
+  }).then(() => { S.dirty = false; toast('Сохранено', 'ok'); location.hash = `#/role/${r.id}`; }).catch(() => {});
+
+  $('#del-r').onclick = (e) => {
+    const n = holders(r).length;
+    if (!confirm(`Удалить роль «${r.name}»?${n ? ` У ${n} игроков она пропадёт.` : ''}`)) return;
+    busy(e.currentTarget, () => store.remove('roles', r.id)).then(() => { S.dirty = false; location.hash = '#/roles'; }).catch(() => {});
+  };
 }
 
-// ───────────────────────── roster ─────────────────────────
-function viewRoster(app) {
+// ───────────────────────── все роли ─────────────────────────
+function viewRoles(app) {
+  const ed = isEditor();
+  const mine = myRole();
+  app.innerHTML = `
+    <div class="page-head">
+      <div><h1>Все роли</h1><p class="muted">Открой любую роль, чтобы понять, что делает напарник.</p></div>
+      ${ed ? '<button class="btn primary" id="add-role">+ Новая роль</button>' : ''}
+    </div>
+    <div class="grid three">
+      ${S.roles.map((r) => {
+        const ppl = holders(r);
+        return `<a class="card role-card link-card ${r.id === mine?.id ? 'me' : ''}" style="--c:${esc(r.color)}" href="#/role/${r.id}">
+          <div class="role-title">${esc(r.icon || '')} ${esc(r.name)}${r.id === mine?.id ? ' <span class="chip hot">моя</span>' : ''}</div>
+          <p class="muted">${nl(r.description || '')}</p>
+          <div class="holders">${ppl.length ? ppl.map((m) => `<span class="chip">${esc(m.nick)}</span>`).join('') : '<span class="muted sm">никто не назначен</span>'}</div>
+        </a>`;
+      }).join('') || '<p class="muted">Ролей пока нет.</p>'}
+    </div>`;
+  const add = $('#add-role');
+  if (add) add.onclick = () => modal(`
+    <form id="rf"><h2>Новая роль</h2>
+      <div class="row gap"><label class="w-icon">Значок<input name="icon" maxlength="2" placeholder="⚔"></label><label class="grow">Название<input name="name" required maxlength="30"></label></div>
+      <div class="modal-actions"><button type="button" class="btn ghost" data-close>Отмена</button><button class="btn primary">Создать и заполнить</button></div>
+    </form>`, (w, close) => {
+    $('#rf', w).onsubmit = (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      const colors = ['#c4142b', '#ff7a1a', '#ffd23f', '#7dff6a', '#3fd0ff', '#4d6bff', '#9b5cff', '#ff4fd8'];
+      const used = new Set(S.roles.map((r) => r.color));
+      const color = colors.find((c) => !used.has(c)) || colors[S.roles.length % colors.length];
+      busy(e.submitter, () => store.save('roles', null, { name: f.get('name').trim(), icon: f.get('icon').trim(), color, description: '', duties: [], createdAt: Date.now() }))
+        .then((id) => { close(); location.hash = `#/role/${id}/edit`; }).catch(() => {});
+    };
+  });
+}
+
+// ───────────────────────── штаб ─────────────────────────
+function viewHq(app, rt) {
+  if (!isEditor()) { location.hash = '#/me'; return; }
+  const tab = rt.id || 'tactics';
+  if (tab === 'tactic') return viewTactic(app, { id: rt.sub, sub: rt.extra });
+  const tabs = [['tactics', 'Тактики'], ['situations', 'Ситуации'], ['members', 'Состав'], ['maps', 'Карты']];
+  app.innerHTML = `
+    <div class="hq-tabs">${tabs.map(([k, t]) => `<a href="#/hq/${k}" class="tab ${tab === k ? 'active' : ''}">${t}</a>`).join('')}</div>
+    <div id="hq"></div>`;
+  ({ tactics: hqTactics, situations: hqSituations, members: hqMembers, maps: hqMaps }[tab] || hqTactics)($('#hq'), rt);
+}
+
+// --- состав
+function hqMembers(app) {
   const lead = isLeader();
   app.innerHTML = `
     <div class="page-head">
-      <div><h1>Состав клана</h1><p class="muted">${S.members.length} игроков. Каждый видит роли всех, чтобы понимать, кто что делает.</p></div>
+      <div><h1>Состав</h1><p class="muted">${S.members.length} игроков. Роль определяет, что игрок видит на своей странице.</p></div>
       ${lead ? '<button class="btn primary" id="add-member">+ Выдать доступ</button>' : ''}
     </div>
     <div class="member-grid">
@@ -321,16 +519,14 @@ function viewRoster(app) {
             <div class="row gap">
               <select data-access="${m.id}" class="grow">
                 <option value="member" ${m.access === 'member' ? 'selected' : ''}>Боец — только смотрит</option>
-                <option value="officer" ${m.access === 'officer' ? 'selected' : ''}>Офицер — редактирует тактики</option>
+                <option value="officer" ${m.access === 'officer' ? 'selected' : ''}>Офицер — редактирует</option>
               </select>
               <button class="btn ghost sm danger" data-del="${m.id}" title="Забрать доступ">✕</button>
             </div>` : ''}
           ` : `<div>${roleBadge(r)}</div>`}
-          ${r && (r.duties || []).length ? `<ul class="duties sm">${r.duties.map((d) => `<li>${esc(d)}</li>`).join('')}</ul>` : ''}
         </article>`;
       }).join('')}
     </div>`;
-
   if (!lead) return;
   $('#add-member').onclick = addMemberModal;
   $$('[data-role]', app).forEach((s) => s.onchange = () =>
@@ -352,7 +548,7 @@ function addMemberModal() {
       <label>Ник в игре<input name="nick" required maxlength="24"></label>
       <label>Логин<input name="login" required placeholder="латиница, цифры, _ . -" autocomplete="off"></label>
       <label>Пароль<div class="row gap"><input name="password" required minlength="6" class="grow" value="${genPassword()}" autocomplete="off"><button type="button" class="btn ghost sm" id="gen">⟳</button></div></label>
-      <label>Права<select name="access"><option value="member">Боец — только смотрит</option><option value="officer">Офицер — редактирует тактики, роли и карты</option></select></label>
+      <label>Права<select name="access"><option value="member">Боец — только смотрит</option><option value="officer">Офицер — редактирует роли, тактики и ситуации</option></select></label>
       <label>Роль<select name="roleId"><option value="">— без роли —</option>${S.roles.map((r) => `<option value="${r.id}">${esc(r.icon || '')} ${esc(r.name)}</option>`).join('')}</select></label>
       <div class="modal-actions"><button type="button" class="btn ghost" data-close>Отмена</button><button class="btn primary">Создать</button></div>
     </form>`, (w, close) => {
@@ -376,119 +572,53 @@ function addMemberModal() {
   });
 }
 
-// ───────────────────────── roles ─────────────────────────
-function viewRoles(app) {
-  const ed = isEditor();
+// --- тактики
+function hqTactics(app) {
+  const list = sortedTactics();
   app.innerHTML = `
     <div class="page-head">
-      <div><h1>Роли</h1><p class="muted">Что делает каждая роль. Назначать роли игрокам можно в разделе «Состав».</p></div>
-      ${ed ? '<button class="btn primary" id="add-role">+ Новая роль</button>' : ''}
-    </div>
-    <div class="grid three">
-      ${S.roles.map((r) => {
-        const holders = S.members.filter((m) => m.roleId === r.id);
-        return `<article class="card role-card" style="--c:${esc(r.color)}">
-          <div class="role-title">${esc(r.icon || '')} ${esc(r.name)}</div>
-          <p>${nl(r.description)}</p>
-          ${(r.duties || []).length ? `<ul class="duties">${r.duties.map((d) => `<li>${esc(d)}</li>`).join('')}</ul>` : ''}
-          <div class="holders">${holders.length ? holders.map((m) => `<span class="chip">${esc(m.nick)}</span>`).join('') : '<span class="muted sm">никто не назначен</span>'}</div>
-          ${ed ? `<div class="row gap end"><button class="btn ghost sm" data-edit="${r.id}">Изменить</button><button class="btn ghost sm danger" data-del="${r.id}">Удалить</button></div>` : ''}
-        </article>`;
-      }).join('') || '<p class="muted">Ролей пока нет.</p>'}
-    </div>`;
-  if (!ed) return;
-  $('#add-role').onclick = () => roleModal();
-  $$('[data-edit]', app).forEach((b) => b.onclick = () => roleModal(S.roles.find((r) => r.id === b.dataset.edit)));
-  $$('[data-del]', app).forEach((b) => b.onclick = () => {
-    const r = S.roles.find((x) => x.id === b.dataset.del);
-    if (!confirm(`Удалить роль «${r.name}»?`)) return;
-    busy(b, () => store.remove('roles', r.id)).catch(() => {});
-  });
-}
-
-function roleModal(r) {
-  const colors = ['#c4142b', '#ff7a1a', '#ffd23f', '#7dff6a', '#3fd0ff', '#4d6bff', '#9b5cff', '#ff4fd8', '#e8e6ea'];
-  r = r || { name: '', color: colors[Math.floor(Math.random() * colors.length)], icon: '', description: '', duties: [] };
-  modal(`
-    <form id="rf">
-      <h2>${r.id ? 'Изменить роль' : 'Новая роль'}</h2>
-      <div class="row gap">
-        <label class="w-icon">Значок<input name="icon" maxlength="2" value="${esc(r.icon)}" placeholder="⚔"></label>
-        <label class="grow">Название<input name="name" required maxlength="30" value="${esc(r.name)}"></label>
-      </div>
-      <label>Цвет<div class="swatches">${colors.map((c) => `<label class="swatch" style="--c:${c}"><input type="radio" name="color" value="${c}" ${c === r.color ? 'checked' : ''}></label>`).join('')}<input type="color" name="custom" value="${esc(r.color)}"></div></label>
-      <label>Описание<textarea name="description" rows="3">${esc(r.description)}</textarea></label>
-      <label>Обязанности <span class="muted sm">(каждая с новой строки)</span><textarea name="duties" rows="5">${esc((r.duties || []).join('\n'))}</textarea></label>
-      <div class="modal-actions"><button type="button" class="btn ghost" data-close>Отмена</button><button class="btn primary">Сохранить</button></div>
-    </form>`, (w, close) => {
-    const custom = $('[name=custom]', w);
-    custom.oninput = () => $$('[name=color]', w).forEach((x) => { x.checked = false; });
-    $('#rf', w).onsubmit = (e) => {
-      e.preventDefault();
-      const f = new FormData(e.target);
-      const data = {
-        name: f.get('name').trim(), icon: f.get('icon').trim(),
-        color: f.get('color') || custom.value,
-        description: f.get('description').trim(),
-        duties: f.get('duties').split('\n').map((s) => s.trim()).filter(Boolean),
-      };
-      busy(e.submitter, () => store.save('roles', r.id, data)).then(close).catch(() => {});
-    };
-  });
-}
-
-// ───────────────────────── tactics list ─────────────────────────
-function viewTactics(app) {
-  const ed = isEditor();
-  const list = [...S.tactics].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  app.innerHTML = `
-    <div class="page-head">
-      <div><h1>Тактики</h1><p class="muted">Каждая тактика разбита на фазы: где стоит каждый игрок и что он делает.</p></div>
-      ${ed ? '<a class="btn primary" href="#/tactic/new/edit">+ Новая тактика</a>' : ''}
+      <div><h1>Тактики</h1><p class="muted">Фазы, схема и сигналы. Что делает каждая роль, удобнее заполнять на странице роли.</p></div>
+      <a class="btn primary" href="#/hq/tactic/new/edit">+ Новая тактика</a>
     </div>
     <div class="grid three">
       ${list.map((t) => {
         const img = mapImage(t.mapId);
-        return `<a class="card tactic-card" href="#/tactic/${t.id}">
+        const filled = (t.phases || []).reduce((n, p) => n + S.roles.filter((ro) => (p.actions || {})[ro.id]).length, 0);
+        const total = (t.phases || []).length * S.roles.length;
+        return `<a class="card tactic-card" href="#/hq/tactic/${t.id}">
           <div class="thumb" ${img ? `style="background-image:url('${img}')"` : ''}></div>
           <div class="tactic-title">${esc(t.title)}</div>
           <p class="muted sm clamp">${esc(t.description)}</p>
-          <div class="row gap sm">
-            <span class="chip">${(t.phases || []).length} фаз</span>
-          </div>
+          <div class="row gap sm"><span class="chip">${(t.phases || []).length} фаз</span><span class="chip ${filled === total ? 'ok' : 'hot'}">роли ${filled}/${total}</span></div>
         </a>`;
       }).join('') || '<p class="muted">Тактик пока нет.</p>'}
     </div>`;
 }
 
-// ───────────────────────── tactic view ─────────────────────────
 function viewTactic(app, r) {
   if (r.sub === 'edit') return viewTacticEdit(app, r);
   const t = S.tactics.find((x) => x.id === r.id);
-  if (!t) { app.innerHTML = '<div class="card"><p>Тактика не найдена.</p><a href="#/tactics">← К списку</a></div>'; return; }
+  if (!t) { app.innerHTML = '<div class="card"><p>Тактика не найдена.</p><a href="#/hq/tactics">← К списку</a></div>'; return; }
   const phases = t.phases || [];
   if (S.viewPhase >= phases.length + 1) S.viewPhase = 0;
   const matrix = S.viewPhase === phases.length && phases.length > 0;
   const ph = phases[S.viewPhase];
-  const myId = S.user.uid;
+  const mine = myRole();
 
   app.innerHTML = `
     <div class="page-head">
       <div>
-        <a href="#/tactics" class="muted sm">← Тактики</a>
+        <a href="#/hq/tactics" class="muted sm">← Штаб · Тактики</a>
         <h1>${esc(t.title)}</h1>
         ${t.description ? `<p>${nl(t.description)}</p>` : ''}
-        <p class="muted sm">Обновлено ${fmtDate(t.updatedAt)}${member(t.updatedBy) ? ' · ' + esc(member(t.updatedBy).nick) : ''}</p>
       </div>
-      <div class="row gap">
-        ${isEditor() ? `<a class="btn ghost" href="#/tactic/${t.id}/edit">Редактировать</a>` : ''}
-      </div>
+      <a class="btn primary" href="#/hq/tactic/${t.id}/edit">Редактировать</a>
     </div>
 
     ${phases.length ? `
     <div class="tabs">
       ${phases.map((p, i) => `<button class="tab ${i === S.viewPhase ? 'active' : ''}" data-ph="${i}"><b>${i + 1}</b> ${esc(p.name || 'Фаза')}</button>`).join('')}
-      <button class="tab ${matrix ? 'active' : ''}" data-ph="${phases.length}">▦ Кто что делает</button>
+      <button class="tab ${matrix ? 'active' : ''}" data-ph="${phases.length}">▦ Все роли</button>
     </div>` : '<p class="muted">В тактике пока нет фаз.</p>'}
 
     ${matrix ? matrixHtml(t) : ph ? `
@@ -497,13 +627,13 @@ function viewTactic(app, r) {
       <aside class="card side">
         ${ph.notes ? `<h3>Суть фазы</h3><p>${nl(ph.notes)}</p>` : ''}
         ${ph.trigger ? `<div class="trigger"><b>Сигнал перехода дальше:</b> ${nl(ph.trigger)}</div>` : ''}
-        <h3>Действия игроков</h3>
+        <h3>Действия ролей</h3>
         <ul class="actions">
-          ${sortedMembers().filter((m) => (ph.actions || {})[m.id] || (ph.positions || {})[m.id]).map((m) => `
-            <li class="${m.id === myId ? 'me' : ''}" style="--c:${esc(roleOf(m)?.color || '#555')}">
-              <div class="who"><span class="dot"></span><b>${esc(m.nick)}</b> <span class="muted sm">${esc(roleOf(m)?.name || '')}</span></div>
-              <div>${nl((ph.actions || {})[m.id] || '—')}</div>
-            </li>`).join('') || '<li class="muted">Действия не расписаны</li>'}
+          ${S.roles.map((ro) => `
+            <li class="${ro.id === mine?.id ? 'me' : ''}" style="--c:${esc(ro.color)}">
+              <div class="who"><span class="dot"></span><b>${esc(ro.name)}</b> <a class="muted sm" href="#/role/${ro.id}/edit">изменить</a></div>
+              <div>${nl((ph.actions || {})[ro.id] || '—')}</div>
+            </li>`).join('')}
         </ul>
       </aside>
     </div>` : ''}`;
@@ -517,44 +647,41 @@ function viewTactic(app, r) {
 
 function matrixHtml(t) {
   const phases = t.phases || [];
-  const rows = sortedMembers().filter((m) => phases.some((p) => (p.actions || {})[m.id]));
-  if (!rows.length) return '<p class="muted card">Действия игроков ещё не расписаны.</p>';
+  const mine = myRole();
   return `<div class="card matrix-wrap"><table class="matrix">
-    <thead><tr><th>Игрок</th>${phases.map((p, i) => `<th>${i + 1}. ${esc(p.name || 'Фаза')}</th>`).join('')}</tr></thead>
-    <tbody>${rows.map((m) => `<tr class="${m.id === S.user.uid ? 'me' : ''}">
-      <th style="--c:${esc(roleOf(m)?.color || '#555')}"><span class="dot"></span>${esc(m.nick)}<div class="muted sm">${esc(roleOf(m)?.name || '')}</div></th>
-      ${phases.map((p) => `<td>${nl((p.actions || {})[m.id] || '')}</td>`).join('')}
+    <thead><tr><th>Роль</th>${phases.map((p, i) => `<th>${i + 1}. ${esc(p.name || 'Фаза')}</th>`).join('')}</tr></thead>
+    <tbody>${S.roles.map((ro) => `<tr class="${ro.id === mine?.id ? 'me' : ''}">
+      <th style="--c:${esc(ro.color)}"><span class="dot"></span><a href="#/role/${ro.id}/edit">${esc(ro.name)}</a><div class="muted sm">${holders(ro).map((m) => esc(m.nick)).join(', ')}</div></th>
+      ${phases.map((p) => `<td>${nl((p.actions || {})[ro.id] || '')}</td>`).join('')}
     </tr>`).join('')}</tbody></table></div>`;
 }
 
-// ───────────────────────── tactic editor ─────────────────────────
 const newPhase = (prev) => ({
   name: '', notes: '', trigger: '', actions: {},
   positions: prev ? clone(prev.positions || {}) : {}, arrows: [], labels: [],
 });
 
 function viewTacticEdit(app, r) {
-  if (!isEditor()) { location.hash = '#/tactics'; return; }
   if (!S.draft || S.draftKind !== 'tactic' || (S.draft.id || 'new') !== r.id) {
     S.draftKind = 'tactic';
     const t = r.id === 'new' ? null : S.tactics.find((x) => x.id === r.id);
     if (r.id !== 'new' && !t) { app.innerHTML = '<div class="card">Тактика не найдена.</div>'; return; }
-    S.draft = t ? clone(t) : { title: '', description: '', mapId: '', phases: [newPhase()], acks: {}, version: 0 };
-    S.phaseIdx = 0; S.remoteChanged = false;
+    S.draft = t ? clone(t) : { title: '', description: '', mapId: '', phases: [newPhase()], createdAt: Date.now() };
+    S.phaseIdx = 0;
   }
   const d = S.draft;
   if (S.phaseIdx >= d.phases.length) S.phaseIdx = d.phases.length - 1;
   const ph = d.phases[S.phaseIdx];
+  const mark = () => { S.dirty = true; };
 
   app.innerHTML = `
     <div class="page-head">
-      <div><a href="#/${d.id ? 'tactic/' + d.id : 'tactics'}" class="muted sm">← Отмена</a><h1>${d.id ? 'Редактирование' : 'Новая тактика'}</h1></div>
+      <div><a href="#/hq/${d.id ? 'tactic/' + d.id : 'tactics'}" class="muted sm">← Отмена</a><h1>${d.id ? 'Редактирование тактики' : 'Новая тактика'}</h1></div>
       <div class="row gap">
         ${d.id ? '<button class="btn ghost danger" id="del-t">Удалить</button>' : ''}
         <button class="btn primary" id="save-t">Сохранить</button>
       </div>
     </div>
-    <div class="warn" id="remote-warn" ${S.remoteChanged ? '' : 'hidden'}>⚠ Кто-то другой только что сохранил эту тактику. Если сохранишь сейчас — его изменения перезапишутся.</div>
 
     <section class="card form-grid">
       <label>Название<input id="t-title" maxlength="60" value="${esc(d.title)}" placeholder="Например: Захват центра"></label>
@@ -581,9 +708,9 @@ function viewTacticEdit(app, r) {
         </div>
         <div class="board-wrap"><svg id="board"></svg></div>
         <div class="token-bar">
-          <span class="muted sm">Добавить на схему:</span>
+          <span class="muted sm">Поставить на схему:</span>
           <span id="token-chips"></span>
-          <button class="btn ghost sm" id="all-tokens">Всех</button>
+          <button class="btn ghost sm" id="all-tokens">Все роли</button>
         </div>
         <div class="row gap phase-ops">
           <button class="btn ghost sm" id="ph-left" ${S.phaseIdx === 0 ? 'disabled' : ''}>← Сдвинуть</button>
@@ -596,38 +723,36 @@ function viewTacticEdit(app, r) {
         <label>Название фазы<input id="p-name" maxlength="30" value="${esc(ph.name)}" placeholder="Например: Выход на позиции"></label>
         <label>Суть фазы<textarea id="p-notes" rows="3">${esc(ph.notes)}</textarea></label>
         <label>Сигнал перехода к следующей фазе<input id="p-trigger" value="${esc(ph.trigger)}" placeholder="Например: Командир пишет «ГО»"></label>
-        <h3>Что делает каждый</h3>
+        <h3>Что делает каждая роль</h3>
         <div class="action-edit">
-          ${sortedMembers().map((m) => `
-            <label style="--c:${esc(roleOf(m)?.color || '#555')}"><span class="who"><span class="dot"></span>${esc(m.nick)} <span class="muted sm">${esc(roleOf(m)?.name || '')}</span></span>
-            <textarea rows="2" data-act="${m.id}" placeholder="—">${esc((ph.actions || {})[m.id] || '')}</textarea></label>`).join('')}
+          ${S.roles.map((ro) => `
+            <label style="--c:${esc(ro.color)}"><span class="who"><span class="dot"></span>${esc(ro.name)}</span>
+            <textarea rows="2" data-act="${ro.id}" placeholder="—">${esc((ph.actions || {})[ro.id] || '')}</textarea></label>`).join('')}
         </div>
       </aside>
     </div>`;
 
-  // поля тактики
-  $('#t-title').oninput = (e) => { d.title = e.target.value; };
-  $('#t-desc').oninput = (e) => { d.description = e.target.value; };
-  $('#t-map').onchange = (e) => { d.mapId = e.target.value; board.setData(ph, mapImage(d.mapId)); };
-  // поля фазы
-  $('#p-name').oninput = (e) => { ph.name = e.target.value; $(`[data-ph="${S.phaseIdx}"]`).innerHTML = `<b>${S.phaseIdx + 1}</b> ${esc(ph.name || 'Фаза')}`; };
-  $('#p-notes').oninput = (e) => { ph.notes = e.target.value; };
-  $('#p-trigger').oninput = (e) => { ph.trigger = e.target.value; };
+  $('#t-title').oninput = (e) => { d.title = e.target.value; mark(); };
+  $('#t-desc').oninput = (e) => { d.description = e.target.value; mark(); };
+  $('#t-map').onchange = (e) => { d.mapId = e.target.value; board.setData(ph, mapImage(d.mapId)); mark(); };
+  $('#p-name').oninput = (e) => { ph.name = e.target.value; $(`[data-ph="${S.phaseIdx}"]`).innerHTML = `<b>${S.phaseIdx + 1}</b> ${esc(ph.name || 'Фаза')}`; mark(); };
+  $('#p-notes').oninput = (e) => { ph.notes = e.target.value; mark(); };
+  $('#p-trigger').oninput = (e) => { ph.trigger = e.target.value; mark(); };
   $$('[data-act]', app).forEach((ta) => ta.oninput = () => {
     ph.actions = ph.actions || {};
     if (ta.value.trim()) ph.actions[ta.dataset.act] = ta.value; else delete ph.actions[ta.dataset.act];
+    mark();
   });
 
-  // схема
-  const board = new Board($('#board'), { tokenInfo, onChange: renderChips });
+  const board = new Board($('#board'), { tokenInfo, onChange: () => { renderChips(); mark(); } });
   board.setData(ph, mapImage(d.mapId));
   function renderChips() {
-    const off = sortedMembers().filter((m) => !ph.positions[m.id]);
-    $('#token-chips').innerHTML = off.map((m) => `<button class="chip btn-chip" data-tok="${m.id}" style="--c:${esc(roleOf(m)?.color || '#555')}"><span class="dot"></span>${esc(m.nick)}</button>`).join('') || '<span class="muted sm">все на схеме</span>';
+    const off = S.roles.filter((ro) => !ph.positions[ro.id]);
+    $('#token-chips').innerHTML = off.map((ro) => `<button class="chip btn-chip" data-tok="${ro.id}" style="--c:${esc(ro.color)}"><span class="dot"></span>${esc(ro.name)}</button>`).join('') || '<span class="muted sm">все на схеме</span>';
     $$('[data-tok]').forEach((b) => b.onclick = () => board.addToken(b.dataset.tok));
   }
   renderChips();
-  $('#all-tokens').onclick = () => { sortedMembers().forEach((m) => { if (!ph.positions[m.id]) board.addToken(m.id); }); };
+  $('#all-tokens').onclick = () => { S.roles.forEach((ro) => { if (!ph.positions[ro.id]) board.addToken(ro.id); }); };
   $$('#modes button').forEach((b) => b.onclick = () => {
     $$('#modes button').forEach((x) => x.classList.toggle('active', x === b)); board.setMode(b.dataset.mode);
   });
@@ -637,107 +762,64 @@ function viewTacticEdit(app, r) {
   });
   $('#dash').onchange = (e) => { board.dash = e.target.checked; };
 
-  // фазы
-  $$('[data-ph]', app).forEach((b) => b.onclick = () => { S.phaseIdx = +b.dataset.ph; render(); });
-  $('#add-ph').onclick = () => { d.phases.push(newPhase(d.phases[d.phases.length - 1])); S.phaseIdx = d.phases.length - 1; render(); };
-  $('#ph-dup').onclick = () => { d.phases.splice(S.phaseIdx + 1, 0, { ...clone(ph), name: (ph.name || 'Фаза') + ' (копия)' }); S.phaseIdx++; render(); };
-  $('#ph-del').onclick = () => { if (confirm('Удалить эту фазу?')) { d.phases.splice(S.phaseIdx, 1); render(); } };
-  const move = (dir) => { const i = S.phaseIdx, j = i + dir; [d.phases[i], d.phases[j]] = [d.phases[j], d.phases[i]]; S.phaseIdx = j; render(); };
+  const rerender = () => { mark(); viewTacticEdit(app, r); };
+  $$('[data-ph]', app).forEach((b) => b.onclick = () => { S.phaseIdx = +b.dataset.ph; viewTacticEdit(app, r); });
+  $('#add-ph').onclick = () => { d.phases.push(newPhase(d.phases[d.phases.length - 1])); S.phaseIdx = d.phases.length - 1; rerender(); };
+  $('#ph-dup').onclick = () => { d.phases.splice(S.phaseIdx + 1, 0, { ...clone(ph), name: (ph.name || 'Фаза') + ' (копия)' }); S.phaseIdx++; rerender(); };
+  $('#ph-del').onclick = () => { if (confirm('Удалить эту фазу?')) { d.phases.splice(S.phaseIdx, 1); rerender(); } };
+  const move = (dir) => { const i = S.phaseIdx, j = i + dir; [d.phases[i], d.phases[j]] = [d.phases[j], d.phases[i]]; S.phaseIdx = j; rerender(); };
   $('#ph-left').onclick = () => move(-1);
   $('#ph-right').onclick = () => move(1);
 
-  // сохранение
   $('#save-t').onclick = (e) => {
     if (!d.title.trim()) return toast('Дай тактике название', 'err');
-    const data = { ...d, title: d.title.trim(), version: (d.version || 0) + 1, updatedAt: Date.now(), updatedBy: S.user.uid };
+    const data = { ...d, title: d.title.trim(), updatedAt: Date.now(), updatedBy: S.user.uid };
     delete data.id;
-    data.acks = { ...(d.acks || {}), [S.user.uid]: data.version };
     busy(e.currentTarget, () => store.save('tactics', d.id, data)).then((id) => {
       toast('Тактика сохранена', 'ok');
-      S.draft = null; S.viewPhase = S.phaseIdx; location.hash = `#/tactic/${id}`;
+      S.dirty = false; S.draft = null; S.viewPhase = S.phaseIdx; location.hash = `#/hq/tactic/${id}`;
     }).catch(() => {});
   };
   const del = $('#del-t');
   if (del) del.onclick = () => {
     if (!confirm(`Удалить тактику «${d.title}» насовсем?`)) return;
-    busy(del, () => store.remove('tactics', d.id)).then(() => { S.draft = null; location.hash = '#/tactics'; }).catch(() => {});
+    busy(del, () => store.remove('tactics', d.id)).then(() => { S.dirty = false; S.draft = null; location.hash = '#/hq/tactics'; }).catch(() => {});
   };
 }
 
-// ───────────────────────── situations ─────────────────────────
-// Ситуация = что случилось + что делает каждая роль. Всё на одной странице.
-const SEED_SITUATIONS = [
-  { title: 'Команда внутри, ты снаружи', common: 'Отставшего не ждём, если это ломает план.',
-    byRoleName: { 'Командир': 'Решает: ждать или продолжать.', 'Разведчик': 'Остаётся снаружи и докладывает, кто подходит.', 'Штурмовик': 'Не лезет один, заходит по команде.', 'Поддержка': 'Заходит к команде безопасным путём.', 'Защитник': 'Прикрывает вход снаружи.' } },
-  { title: 'Ты внутри, команда снаружи', common: 'Не уходить вглубь, ждать команду у входа.',
-    byRoleName: { 'Командир': 'Держит вход и ведёт команду через чат.', 'Разведчик': 'Тихо осматривается и докладывает.', 'Штурмовик': 'Прячется и не начинает бой первым.', 'Поддержка': 'Ищет безопасное место и ждёт.', 'Защитник': 'Держит вход изнутри.' } },
-  { title: 'Потеряли командира', common: 'Командует заранее назначенный заместитель.',
-    byRoleName: { 'Командир': 'До боя назначает заместителя.', 'Разведчик': 'Докладывает обстановку новому командиру.', 'Штурмовик': 'Останавливает атаку без приказа.', 'Поддержка': 'Помогает командиру, если безопасно.', 'Защитник': 'Прикрывает отход к точке сбора.' } },
-  { title: 'Атака с тыла', common: 'Кто увидел первым — сразу пишет «ТЫЛ!».',
-    byRoleName: { 'Командир': 'Разворачивает ближайших на угрозу.', 'Разведчик': 'Говорит, откуда и сколько.', 'Штурмовик': 'Разворачивается по команде.', 'Поддержка': 'Уходит за спины штурмовиков.', 'Защитник': 'Первым встречает удар.' } },
-  { title: 'Отступление', common: 'Отходим к точке сбора, никто не остаётся один.',
-    byRoleName: { 'Командир': 'Объявляет отход и точку сбора.', 'Разведчик': 'Проверяет путь отхода.', 'Штурмовик': 'Уходит последним, прикрывает.', 'Поддержка': 'Помогает отставшим.', 'Защитник': 'Держит проход, пока все не уйдут.' } },
-];
-
-const sortSituations = (list) => [...list].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.title.localeCompare(b.title));
+// --- ситуации (список + панель, всё редактируется на месте)
 const sitRows = () => [{ id: 'common', name: 'Все', icon: '👥', color: '#8f8899' }, ...S.roles];
-const sitText = (x, id) => (id === 'common' ? x.common : (x.byRole || {})[id]) || '';
 
-function mySituationsHtml(m) {
-  const r = roleOf(m);
-  const list = sortSituations(S.situations).filter((x) => (r && sitText(x, r.id)) || x.common);
-  if (!list.length) return '<p class="muted">Пока ничего не расписано.</p>';
-  return `<ul class="my-sits">${list.map((x) => `<li>
-    <a href="#/situations/${x.id}">${esc(x.title)}</a>
-    <span>${nl((r && sitText(x, r.id)) || x.common)}</span></li>`).join('')}</ul>`;
-}
-
-function viewSituations(app, r) {
-  const ed = isEditor();
-  const list = sortSituations(S.situations);
-  const cur = list.find((x) => x.id === r.id) || list[0];
-
+function hqSituations(app, rt) {
+  const list = sortedSituations();
+  const cur = list.find((x) => x.id === rt.sub) || list[0];
   app.innerHTML = `
     <div class="page-head">
-      <div><h1>Ситуации</h1><p class="muted">Что делает каждая роль, когда это случилось.</p></div>
-      ${ed ? `<div class="row gap">
+      <div><h1>Ситуации</h1><p class="muted">Что случилось и что делает каждая роль. То же самое можно заполнять на странице роли.</p></div>
+      <div class="row gap">
         ${list.length < 3 ? '<button class="btn ghost" id="seed-sit">Добавить примеры</button>' : ''}
-        <button class="btn primary" id="new-sit">+ Ситуация</button></div>` : ''}
+        <button class="btn primary" id="new-sit">+ Ситуация</button></div>
     </div>
     ${cur ? `<div class="sit-layout">
-      <nav class="card sit-list">${list.map((x) => `<a href="#/situations/${x.id}" class="${x.id === cur.id ? 'active' : ''}">${esc(x.title)}</a>`).join('')}</nav>
+      <nav class="card sit-list">${list.map((x) => `<a href="#/hq/situations/${x.id}" class="${x.id === cur.id ? 'active' : ''}">${esc(x.title)}</a>`).join('')}</nav>
       <section class="card sit-panel" id="sit-panel"></section>
-    </div>` : `<div class="card empty-state"><p class="muted">Пока пусто.${ed ? ' Добавь первую ситуацию, например «Команда внутри, ты снаружи».' : ''}</p></div>`}`;
+    </div>` : '<div class="card empty-state"><p class="muted">Пока пусто. Добавь первую ситуацию, например «Команда внутри, ты снаружи».</p></div>'}`;
 
   const seed = $('#seed-sit');
   if (seed) seed.onclick = () => busy(seed, seedSituations).catch(() => {});
-  const add = $('#new-sit');
-  if (add) add.onclick = () => busy(add, () => store.save('situations', null, { title: 'Новая ситуация', description: '', common: '', byRole: {}, createdAt: Date.now() }))
-    .then((id) => { S.focusSit = true; location.hash = `#/situations/${id}`; }).catch(() => {});
-  if (cur) (ed ? sitEditor : sitReader)(cur);
-}
-
-function sitReader(x) {
-  const myRole = roleOf(me());
-  const rows = sitRows().filter((ro) => sitText(x, ro.id));
-  $('#sit-panel').innerHTML = `
-    <h2>${esc(x.title)}</h2>
-    ${x.description ? `<p class="muted">${nl(x.description)}</p>` : ''}
-    <div class="sit-rows">${rows.map((ro) => `
-      <div class="sit-row ${ro.id === myRole?.id ? 'me' : ''}" style="--c:${esc(ro.color)}">
-        <div class="sit-who">${esc(ro.icon || '')} ${esc(ro.name)}</div>
-        <div>${nl(sitText(x, ro.id))}</div>
-      </div>`).join('') || '<p class="muted">Ещё не расписано.</p>'}</div>`;
+  $('#new-sit').onclick = (e) => busy(e.currentTarget, () => store.save('situations', null, { title: 'Новая ситуация', description: '', common: '', byRole: {}, createdAt: Date.now() }))
+    .then((id) => { S.focusSit = true; location.hash = `#/hq/situations/${id}`; }).catch(() => {});
+  if (cur) sitEditor(cur);
 }
 
 function sitEditor(x) {
-  const myRole = roleOf(me());
+  const mine = myRole();
   const panel = $('#sit-panel');
   panel.innerHTML = `
     <input class="sit-title" id="s-title" value="${esc(x.title)}" placeholder="Что случилось">
     <textarea id="s-desc" rows="1" placeholder="Подробнее (необязательно)">${esc(x.description || '')}</textarea>
     <div class="sit-rows">${sitRows().map((ro) => `
-      <label class="sit-row edit ${ro.id === myRole?.id ? 'me' : ''}" style="--c:${esc(ro.color)}">
+      <label class="sit-row edit ${ro.id === mine?.id ? 'me' : ''}" style="--c:${esc(ro.color)}">
         <div class="sit-who">${esc(ro.icon || '')} ${esc(ro.name)}</div>
         <textarea rows="1" data-k="${ro.id}" placeholder="${ro.id === 'common' ? 'Правило для всех' : 'Что делает'}">${esc(sitText(x, ro.id))}</textarea>
       </label>`).join('')}</div>
@@ -746,9 +828,8 @@ function sitEditor(x) {
       <span class="row gap"><span class="muted sm" id="s-status"></span><button class="btn primary" id="s-save">Сохранить</button></span>
     </div>`;
 
-  const grow = (t) => { t.style.height = 'auto'; t.style.height = t.scrollHeight + 2 + 'px'; };
-  $$('textarea', panel).forEach((t) => { grow(t); t.addEventListener('input', () => grow(t)); });
-  panel.addEventListener('input', () => { S.sitDirty = x.id; $('#s-status').textContent = 'не сохранено'; });
+  $$('textarea', panel).forEach((t) => { autogrow(t); t.addEventListener('input', () => autogrow(t)); });
+  panel.addEventListener('input', () => { S.dirty = true; $('#s-status').textContent = 'не сохранено'; });
   if (S.focusSit) { S.focusSit = false; const t = $('#s-title'); t.focus(); t.select(); }
 
   $('#s-save').onclick = (e) => {
@@ -761,12 +842,12 @@ function sitEditor(x) {
     const data = { ...x, title: $('#s-title').value.trim() || 'Без названия', description: $('#s-desc').value.trim(), common, byRole, updatedAt: Date.now(), updatedBy: S.user.uid };
     delete data.id;
     busy(e.currentTarget, () => store.save('situations', x.id, data))
-      .then(() => { S.sitDirty = null; toast('Сохранено', 'ok'); render(); }).catch(() => {});
+      .then(() => { S.dirty = false; toast('Сохранено', 'ok'); render(); }).catch(() => {});
   };
   $('#s-del').onclick = (e) => {
     if (!confirm(`Удалить ситуацию «${x.title}»?`)) return;
     busy(e.currentTarget, () => store.remove('situations', x.id))
-      .then(() => { S.sitDirty = null; location.hash = '#/situations'; }).catch(() => {});
+      .then(() => { S.dirty = false; location.hash = '#/hq/situations'; }).catch(() => {});
   };
 }
 
@@ -785,22 +866,20 @@ async function seedSituations() {
   }
 }
 
-// ───────────────────────── maps ─────────────────────────
-function viewMaps(app) {
-  const ed = isEditor();
+// --- карты
+function hqMaps(app) {
   app.innerHTML = `
     <div class="page-head">
-      <div><h1>Карты</h1><p class="muted">Скриншоты карт или локаций из игры — на них рисуются тактики.</p></div>
-      ${ed ? '<button class="btn primary" id="add-map">+ Загрузить карту</button>' : ''}
+      <div><h1>Карты</h1><p class="muted">Скриншоты карт или локаций из игры, на них рисуются схемы тактик.</p></div>
+      <button class="btn primary" id="add-map">+ Загрузить карту</button>
     </div>
     <div class="grid three">
       ${S.maps.map((m) => `<article class="card map-card">
         <div class="thumb big" style="background-image:url('${m.image}')"></div>
-        <div class="row between"><b>${esc(m.name)}</b>${ed ? `<button class="btn ghost sm danger" data-del="${m.id}">Удалить</button>` : ''}</div>
+        <div class="row between"><b>${esc(m.name)}</b><button class="btn ghost sm danger" data-del="${m.id}">Удалить</button></div>
         <span class="muted sm">в тактиках: ${S.tactics.filter((t) => t.mapId === m.id).length}</span>
-      </article>`).join('') || '<p class="muted">Карт пока нет. Без карты тактики рисуются на сетке.</p>'}
+      </article>`).join('') || '<p class="muted">Карт пока нет. Без карты схемы рисуются на сетке.</p>'}
     </div>`;
-  if (!ed) return;
   $('#add-map').onclick = () => modal(`
     <form id="mapf">
       <h2>Новая карта</h2>
@@ -828,7 +907,7 @@ function viewMaps(app) {
 function viewProfile(app) {
   const m = me();
   app.innerHTML = `
-    <div class="page-head"><div><h1>Профиль</h1><p class="muted">@${esc(m.login)} · ${ACCESS[m.access].name}</p></div></div>
+    <div class="page-head"><div><h1>Профиль</h1><p class="muted">@${esc(m.login)} · ${ACCESS[m.access].name} · ${roleBadge(roleOf(m))}</p></div></div>
     <div class="grid two">
       <form class="card" id="nickf">
         <h2>Ник</h2>
